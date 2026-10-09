@@ -404,17 +404,32 @@ static bool is_host_url_key(const std::string &key)
     return key == "print_host" || key == "print_host_webui";
 }
 
+// Length of a leading "scheme://", or 0. The scheme has to start the value and be
+// RFC 3986 letters (ASCII, whatever the locale), so in "user:pa://ss@host" the "user:pa"
+// is not mistaken for one.
+static size_t url_scheme_length(const std::string &url)
+{
+    const auto alpha = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
+    const auto digit = [](char c) { return c >= '0' && c <= '9'; };
+    if (url.empty() || !alpha(url[0]))
+        return 0;
+    size_t i = 1;
+    while (i < url.size() && (alpha(url[i]) || digit(url[i]) || url[i] == '+' || url[i] == '-' || url[i] == '.'))
+        ++i;
+    return url.compare(i, 3, "://") == 0 ? i + 3 : 0;
+}
+
+// Everything between the scheme and the LAST '@' is cut. A host never contains '@', while a
+// password may contain '@', '/', '?', '#' or spaces, so this hides all of them. A URL with an
+// '@' in its path loses the part before it too: it cannot be told apart from a password
+// containing '/', and over-redacting a rare URL is the safe way to be wrong.
+// Keep in step with _strip_userinfo in orcaslicer-mcp's guard.py.
 static std::string strip_url_userinfo(const std::string &url)
 {
-    // Only a "://" that ends the scheme counts, i.e. one that comes before any other '/'.
-    const size_t sep   = url.find("://");
-    const size_t start = (sep != std::string::npos && url.find('/') == sep + 1) ? sep + 3 : 0;
-    const size_t slash = url.find('/', start);
-    // The LAST '@' before the path, so a password containing '@' is covered too.
-    const size_t at    = url.rfind('@', slash);
-    if (at == std::string::npos || at < start)
+    const size_t at = url.rfind('@');
+    if (at == std::string::npos)
         return url;
-    return url.substr(0, start) + k_redacted + url.substr(at);
+    return url.substr(0, url_scheme_length(url)) + k_redacted + url.substr(at);
 }
 
 // ---------------------------------------------------------------------------
