@@ -270,12 +270,15 @@ Response Controller::handle_status()
             objects.push_back({{"name", mo->name},
                                {"size_mm", {sz.x(), sz.y(), sz.z()}}});
         }
-        auto plate_valid = plater->get_partplate_list().get_curr_plate()->is_slice_result_valid();
+        PartPlateList &plates = plater->get_partplate_list();
+        auto plate_valid = plates.get_curr_plate()->is_slice_result_valid();
         return {
             {"app", SLIC3R_APP_NAME},
+            // plates: how many there are and which one slice/gcode/render act on.
+            {"plates", {{"count", plates.get_plate_count()}, {"current", plates.get_curr_plate_index()}}},
             {"app_version", SoftFever_VERSION},
             {"api_version", "1.0"},
-            {"capabilities", {"status", "config", "slice", "events", "model", "preset", "gcode", "objects", "arrange", "orient", "object_config", "slice_breakdown", "plate_render", "sensitive_key_policy"}},
+            {"capabilities", {"status", "config", "slice", "events", "model", "preset", "gcode", "objects", "arrange", "orient", "object_config", "slice_breakdown", "plate_render", "sensitive_key_policy", "plates"}},
             {"sensitive_keys_allowed", sensitive_writes_allowed()},
             {"project", plater->get_project_filename().ToUTF8().data()},
             {"objects", objects},
@@ -902,6 +905,148 @@ void Controller::set_slice_state(const std::function<void(SliceState&)> &mut, co
     wxGetApp().remote_api_server().broadcast(snapshot);
 }
 
+// Stats + warnings of the CURRENT plate's slice result, in the shape GET /slice/status
+// reports. GUI thread only. Used when a slice completes, and (plates) whenever the
+// current plate changes or an already-valid plate is sliced again, so /slice/status
+// always describes the plate that slice, gcode and plate/render act on.
+static void current_plate_slice_stats(nlohmann::json &stats, nlohmann::json &warnings)
+{
+    warnings = nlohmann::json::array();
+    auto &plates = wxGetApp().plater()->get_partplate_list();
+    const PrintStatistics &ps = plates.get_current_fff_print().print_statistics();
+    stats = {
+        {"estimated_time", ps.estimated_normal_print_time},
+        {"filament_used_mm", ps.total_used_filament},
+        {"filament_used_g", ps.total_weight},
+        {"total_cost", ps.total_cost}
+    };
+    if (GCodeProcessorResult *res = plates.get_curr_plate()->get_slice_result()) {
+        if (!res->print_statistics.modes.empty())
+            stats["estimated_time_seconds"] = res->print_statistics.modes.front().time;
+        for (const auto &w : res->warnings)
+            warnings.push_back({{"level", w.level}, {"message", w.msg}, {"code", w.error_code}});
+        // The "toolpath goes beyond the plate boundaries" warning is a GUI plater
+        // notification (GLCanvas3D), computed from the gcode viewer's bed-containment
+        // check - so it never reaches res->warnings and was invisible to the API.
+        // Recompute it here from the same data the viewer uses (BuildVolume::
+        // all_paths_inside over the extrude moves) and surface it in warnings[].
+        BoundingBoxf3 paths_bbox;
+        bool any_path = false;
+        for (const auto &mv : res->moves) {
+            if (mv.type == EMoveType::Extrude && mv.extrusion_role != erCustom &&
+                mv.width != 0.f && mv.height != 0.f) {
+                paths_bbox.merge(mv.position.cast<double>());
+                any_path = true;
+            }
+        }
+        if (any_path && !wxGetApp().plater()->build_volume().all_paths_inside(*res, paths_bbox))
+            warnings.push_back({{"level", 3},
+                                {"message", "A G-code path goes beyond the plate boundaries."},
+                                {"code", "TOOLPATH_OUTSIDE"}});
+
+        // F14: per-feature (extrusion-role) breakdown for the slice-analytics MCP.
+        // PrintEstimatedStatistics has no per-role TIME, so sum it per role from the
+        // moves (Normal mode, index 0 - matches estimated_time_seconds). Filament comes
+        // from used_filaments_per_role; flow is the COMMANDED volumetric rate
+        // (feedrate * mm3_per_mm), the right basis for detecting flow-ceiling clamping.
+        // Role keys are STABLE Orca config-feature tokens (NOT localized role_to_string)
+        // so the MCP predicted_flows keys match by string - see the fork-breakdown plan.
+        auto role_token = [](int r) -> const char* {
+            switch (r) {
+                case erExternalPerimeter:        return "outer_wall";
+                case erPerimeter:                return "inner_wall";
+                case erInternalInfill:           return "sparse_infill";
+                case erSolidInfill:              return "internal_solid_infill";
+                case erTopSolidInfill:           return "top_surface";
+                case erGapFill:                  return "gap_infill";
+                case erBridgeInfill:             return "bridge";
+                case erOverhangPerimeter:        return "overhang_perimeter";
+                case erBottomSurface:            return "bottom_surface";
+                case erIroning:                  return "ironing";
+                case erInternalBridgeInfill:     return "internal_bridge";
+                case erSkirt:                    return "skirt";
+                case erBrim:                     return "brim";
+                case erSupportMaterial:          return "support";
+                case erSupportMaterialInterface: return "support_interface";
+                case erSupportTransition:        return "support_transition";
+                case erWipeTower:                return "wipe_tower";
+                case erCustom:                   return "custom";
+                case erMixed:                    return "mixed";
+                default:                         return nullptr; // erNone / erCount
+            }
+        };
+        struct RoleAgg { double time_s = 0.0, max_flow = 0.0, sum_ft = 0.0; };
+        RoleAgg agg[erCount];
+        for (const auto &mv : res->moves) {
+            if (mv.type != EMoveType::Extrude) continue;
+            int r = (int) mv.extrusion_role;
+            if (r <= 0 || r >= erCount) continue;
+            double t = mv.time[0];
+            double vr = mv.volumetric_rate(); // feedrate * mm3_per_mm
+            agg[r].time_s += t;
+            agg[r].sum_ft += vr * t;
+            if (vr > agg[r].max_flow) agg[r].max_flow = vr;
+        }
+        double total_time = res->print_statistics.modes.empty() ? 0.0
+                            : (double) res->print_statistics.modes.front().time;
+        const auto &fpr = res->print_statistics.used_filaments_per_role;
+        nlohmann::json roles = nlohmann::json::array();
+        for (int r = 1; r < erCount; ++r) {
+            const char *tok = role_token(r);
+            if (tok == nullptr) continue;
+            auto it = fpr.find((ExtrusionRole) r);
+            bool has_fil = (it != fpr.end());
+            if (agg[r].time_s <= 0.0 && !has_fil) continue;
+            nlohmann::json role_j = {
+                {"role", tok},
+                {"time_s", agg[r].time_s},
+                {"time_pct", total_time > 0.0 ? 100.0 * agg[r].time_s / total_time : 0.0},
+                {"flow_mm3_s", {{"max", agg[r].max_flow},
+                                {"mean", agg[r].time_s > 0.0 ? agg[r].sum_ft / agg[r].time_s : 0.0}}}
+            };
+            if (has_fil) {
+                // used_filaments_per_role.first is METERS (GUI convention); emit mm to
+                // match top-level filament_used_mm. .second is grams.
+                role_j["filament_mm"] = it->second.first * 1000.0;
+                role_j["filament_g"]  = it->second.second;
+            }
+            roles.push_back(role_j);
+        }
+        stats["breakdown"] = {
+            {"mode", "normal"},
+            {"total_time_s", total_time},
+            {"roles", roles},
+            {"metrics", nlohmann::json::object()},
+            {"layers", nlohmann::json::array()}
+        };
+    }
+}
+
+// plates: point /slice/status at the plate that is current NOW. The stored state
+// otherwise keeps describing whichever plate was sliced last, so after a plate
+// switch get_slice_status / slice_and_wait would report another plate's time and
+// filament. GUI thread only.
+void Controller::sync_slice_state_to_current_plate(const char *event_name)
+{
+    if (slice_state().state == "slicing") return;
+    PartPlateList &plates = wxGetApp().plater()->get_partplate_list();
+    PartPlate *plate = plates.get_curr_plate();
+    if (plate != nullptr && plate->is_slice_result_valid()) {
+        nlohmann::json stats, warnings;
+        current_plate_slice_stats(stats, warnings);
+        set_slice_state([&](SliceState &s) {
+            s.state = "done"; s.percent = 100; s.message = "";
+            s.stats = stats; s.warnings = warnings;
+        }, event_name);
+    } else {
+        const std::string msg = "plate " + std::to_string(plates.get_curr_plate_index() + 1) + " is not sliced";
+        set_slice_state([&](SliceState &s) {
+            s.state = "idle"; s.percent = -1; s.message = msg;
+            s.stats = nullptr; s.warnings = nlohmann::json::array();
+        }, event_name);
+    }
+}
+
 // Tracks which Plater the slice events are bound to. A GUI recreate (language/
 // skin switch) builds a NEW Plater and the old Bind()s die with it, so we must
 // rebind onto the new plater. File-static (only one Controller ever exists)
@@ -942,115 +1087,8 @@ void Controller::bind_plater_events()
             return;
         }
         // Success: harvest stats on the GUI thread (we ARE on it - wx handler).
-        nlohmann::json stats, warnings = nlohmann::json::array();
-        auto &plates = wxGetApp().plater()->get_partplate_list();
-        const PrintStatistics &ps = plates.get_current_fff_print().print_statistics();
-        stats = {
-            {"estimated_time", ps.estimated_normal_print_time},
-            {"filament_used_mm", ps.total_used_filament},
-            {"filament_used_g", ps.total_weight},
-            {"total_cost", ps.total_cost}
-        };
-        if (GCodeProcessorResult *res = plates.get_curr_plate()->get_slice_result()) {
-            if (!res->print_statistics.modes.empty())
-                stats["estimated_time_seconds"] = res->print_statistics.modes.front().time;
-            for (const auto &w : res->warnings)
-                warnings.push_back({{"level", w.level}, {"message", w.msg}, {"code", w.error_code}});
-            // The "toolpath goes beyond the plate boundaries" warning is a GUI plater
-            // notification (GLCanvas3D), computed from the gcode viewer's bed-containment
-            // check - so it never reaches res->warnings and was invisible to the API.
-            // Recompute it here from the same data the viewer uses (BuildVolume::
-            // all_paths_inside over the extrude moves) and surface it in warnings[].
-            BoundingBoxf3 paths_bbox;
-            bool any_path = false;
-            for (const auto &mv : res->moves) {
-                if (mv.type == EMoveType::Extrude && mv.extrusion_role != erCustom &&
-                    mv.width != 0.f && mv.height != 0.f) {
-                    paths_bbox.merge(mv.position.cast<double>());
-                    any_path = true;
-                }
-            }
-            if (any_path && !wxGetApp().plater()->build_volume().all_paths_inside(*res, paths_bbox))
-                warnings.push_back({{"level", 3},
-                                    {"message", "A G-code path goes beyond the plate boundaries."},
-                                    {"code", "TOOLPATH_OUTSIDE"}});
-
-            // F14: per-feature (extrusion-role) breakdown for the slice-analytics MCP.
-            // PrintEstimatedStatistics has no per-role TIME, so sum it per role from the
-            // moves (Normal mode, index 0 - matches estimated_time_seconds). Filament comes
-            // from used_filaments_per_role; flow is the COMMANDED volumetric rate
-            // (feedrate * mm3_per_mm), the right basis for detecting flow-ceiling clamping.
-            // Role keys are STABLE Orca config-feature tokens (NOT localized role_to_string)
-            // so the MCP predicted_flows keys match by string - see the fork-breakdown plan.
-            auto role_token = [](int r) -> const char* {
-                switch (r) {
-                    case erExternalPerimeter:        return "outer_wall";
-                    case erPerimeter:                return "inner_wall";
-                    case erInternalInfill:           return "sparse_infill";
-                    case erSolidInfill:              return "internal_solid_infill";
-                    case erTopSolidInfill:           return "top_surface";
-                    case erGapFill:                  return "gap_infill";
-                    case erBridgeInfill:             return "bridge";
-                    case erOverhangPerimeter:        return "overhang_perimeter";
-                    case erBottomSurface:            return "bottom_surface";
-                    case erIroning:                  return "ironing";
-                    case erInternalBridgeInfill:     return "internal_bridge";
-                    case erSkirt:                    return "skirt";
-                    case erBrim:                     return "brim";
-                    case erSupportMaterial:          return "support";
-                    case erSupportMaterialInterface: return "support_interface";
-                    case erSupportTransition:        return "support_transition";
-                    case erWipeTower:                return "wipe_tower";
-                    case erCustom:                   return "custom";
-                    case erMixed:                    return "mixed";
-                    default:                         return nullptr; // erNone / erCount
-                }
-            };
-            struct RoleAgg { double time_s = 0.0, max_flow = 0.0, sum_ft = 0.0; };
-            RoleAgg agg[erCount];
-            for (const auto &mv : res->moves) {
-                if (mv.type != EMoveType::Extrude) continue;
-                int r = (int) mv.extrusion_role;
-                if (r <= 0 || r >= erCount) continue;
-                double t = mv.time[0];
-                double vr = mv.volumetric_rate(); // feedrate * mm3_per_mm
-                agg[r].time_s += t;
-                agg[r].sum_ft += vr * t;
-                if (vr > agg[r].max_flow) agg[r].max_flow = vr;
-            }
-            double total_time = res->print_statistics.modes.empty() ? 0.0
-                                : (double) res->print_statistics.modes.front().time;
-            const auto &fpr = res->print_statistics.used_filaments_per_role;
-            nlohmann::json roles = nlohmann::json::array();
-            for (int r = 1; r < erCount; ++r) {
-                const char *tok = role_token(r);
-                if (tok == nullptr) continue;
-                auto it = fpr.find((ExtrusionRole) r);
-                bool has_fil = (it != fpr.end());
-                if (agg[r].time_s <= 0.0 && !has_fil) continue;
-                nlohmann::json role_j = {
-                    {"role", tok},
-                    {"time_s", agg[r].time_s},
-                    {"time_pct", total_time > 0.0 ? 100.0 * agg[r].time_s / total_time : 0.0},
-                    {"flow_mm3_s", {{"max", agg[r].max_flow},
-                                    {"mean", agg[r].time_s > 0.0 ? agg[r].sum_ft / agg[r].time_s : 0.0}}}
-                };
-                if (has_fil) {
-                    // used_filaments_per_role.first is METERS (GUI convention); emit mm to
-                    // match top-level filament_used_mm. .second is grams.
-                    role_j["filament_mm"] = it->second.first * 1000.0;
-                    role_j["filament_g"]  = it->second.second;
-                }
-                roles.push_back(role_j);
-            }
-            stats["breakdown"] = {
-                {"mode", "normal"},
-                {"total_time_s", total_time},
-                {"roles", roles},
-                {"metrics", nlohmann::json::object()},
-                {"layers", nlohmann::json::array()}
-            };
-        }
+        nlohmann::json stats, warnings;
+        current_plate_slice_stats(stats, warnings);
         set_slice_state([&](SliceState &s) {
             s.state = "done"; s.percent = 100; s.message = "";
             s.stats = stats; s.warnings = warnings;
@@ -1081,8 +1119,12 @@ Response Controller::handle_slice()
         plater->update(false, /*force_background_processing_update=*/true);
         // reslice() no-ops on an already-valid plate -> no completion event ->
         // status would stick at "slicing". Report the existing result instead.
-        if (plater->get_partplate_list().get_curr_plate()->is_slice_result_valid())
+        if (plater->get_partplate_list().get_curr_plate()->is_slice_result_valid()) {
+            // plates: the stored state may describe another plate, sliced after this
+            // one; report this plate's own result with the reply.
+            sync_slice_state_to_current_plate("slice.done");
             return {{"started", false}, {"already_valid", true}};
+        }
         set_slice_state([](SliceState &s) {
             s.state = "slicing"; s.percent = 0; s.message = "starting";
             s.stats = nullptr; s.warnings = nlohmann::json::array();
@@ -1730,6 +1772,9 @@ Response Controller::handle_get_objects()
                 {"name", mo->name},
                 {"size_mm", {sz.x(), sz.y(), sz.z()}},
                 {"instances", (unsigned) mo->instances.size()},
+                // plates: 0-based index of the plate holding instance 0, -1 when it
+                // sits off every plate (parked beside the bed, or on a deleted plate).
+                {"plate", plater->get_partplate_list().find_instance((int) i, 0)},
             };
             if (!mo->instances.empty()) {
                 const ModelInstance *mi = mo->instances.front();
@@ -1955,6 +2000,242 @@ Response Controller::handle_jobs_status()
     return { 200, r };
 }
 
+// --- plates ------------------------------------------------------------------
+// GET /plates, POST /plates, POST /plates/{i}/select, DELETE /plates/{i} and
+// POST /objects/{id}/plate. Every mutation goes through the same Plater /
+// PartPlateList calls the toolbar uses (Plater::priv::on_action_add_plate,
+// Plater::select_plate, Plater::delete_plate), so undo snapshots, the sidebar
+// plate list, the background process and the preview follow the change exactly
+// as they do for a click.
+
+// One plate as JSON. `objects` is read back through PartPlate::contain_instance,
+// i.e. from the plate's own bookkeeping, not from positions.
+static nlohmann::json plate_json(PartPlateList &plates, int index, const Model &model)
+{
+    PartPlate *p = plates.get_plate(index);
+    nlohmann::json objs = nlohmann::json::array();
+    for (size_t oi = 0; oi < model.objects.size(); ++oi) {
+        const ModelObject *mo = model.objects[oi];
+        for (size_t ii = 0; ii < mo->instances.size(); ++ii)
+            if (p->contain_instance((int) oi, (int) ii))
+                objs.push_back({{"id", (uint64_t) mo->id().id}, {"instance", ii}, {"name", mo->name}});
+    }
+    const BoundingBoxf3 bb  = p->get_build_volume();
+    const Vec3d         org = p->get_origin();
+    return {
+        {"index", index},
+        {"name", p->get_plate_name()},
+        {"current", index == plates.get_curr_plate_index()},
+        {"locked", p->is_locked()},
+        {"empty", p->empty()},
+        {"slice_result_valid", p->is_slice_result_valid()},
+        {"origin", {org.x(), org.y(), org.z()}},
+        {"bbox_min", {bb.min.x(), bb.min.y(), bb.min.z()}},
+        {"bbox_max", {bb.max.x(), bb.max.y(), bb.max.z()}},
+        {"objects", objs},
+    };
+}
+
+Response Controller::handle_get_plates()
+{
+    nlohmann::json r = run_on_ui([]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        PartPlateList &plates = plater->get_partplate_list();
+        nlohmann::json arr = nlohmann::json::array();
+        for (int i = 0; i < plates.get_plate_count(); ++i)
+            arr.push_back(plate_json(plates, i, plater->model()));
+        return {{"plates", arr},
+                {"count", plates.get_plate_count()},
+                {"current", plates.get_curr_plate_index()},
+                {"max", (int) PartPlateList::MAX_PLATES_COUNT},
+                {"can_add", plater->can_add_plate()},
+                {"can_delete", plater->can_delete_plate()}};
+    });
+    return { 200, r };
+}
+
+// POST /plates  body (optional) {"select": true}
+Response Controller::handle_create_plate(const std::string &body)
+{
+    bool select = true;
+    if (!body.empty()) {
+        nlohmann::json in = nlohmann::json::parse(body); // parse_error -> 400 in dispatch
+        if (!in.is_object()) return { 400, {{"error", "body_must_be_object"}} };
+        if (in.contains("select")) {
+            if (!in["select"].is_boolean()) return { 400, {{"error", "select_must_be_boolean"}} };
+            select = in["select"].get<bool>();
+        }
+    }
+    nlohmann::json r = run_on_ui([this, select]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        PartPlateList &plates = plater->get_partplate_list();
+        if (!plater->can_add_plate()) {
+            if (plater->is_background_process_slicing()) return {{"error", "slicing"}};
+            return {{"error", "max_plates"}, {"max", (int) PartPlateList::MAX_PLATES_COUNT}};
+        }
+        // Same steps as the toolbar's "Add plate" (Plater::priv::on_action_add_plate).
+        plater->take_snapshot("add partplate");
+        const int idx = plates.create_plate();
+        if (idx < 0) return {{"error", "max_plates"}, {"max", (int) PartPlateList::MAX_PLATES_COUNT}};
+        if (select) plater->select_plate(idx, false);
+        plater->update();
+        plater->get_camera().requires_zoom_to_plate = REQUIRES_ZOOM_TO_ALL_PLATE;
+        if (select) sync_slice_state_to_current_plate("slice.plate_changed");
+        api_notify("Added plate " + std::to_string(idx + 1));
+        return {{"created", true}, {"index", idx},
+                {"count", plates.get_plate_count()},
+                {"current", plates.get_curr_plate_index()},
+                {"plate", plate_json(plates, idx, plater->model())}};
+    });
+    if (r.contains("error")) return { r["error"] == "slicing" ? 409 : 422, r };
+    return { 200, r };
+}
+
+// POST /plates/{i}/select - makes plate i the one slice, gcode, plate/render and
+// jobs/status act on, exactly like clicking it.
+Response Controller::handle_select_plate(int index)
+{
+    nlohmann::json r = run_on_ui([this, index]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        PartPlateList &plates = plater->get_partplate_list();
+        if (index < 0 || index >= plates.get_plate_count())
+            return {{"error", "unknown_plate"}, {"count", plates.get_plate_count()}};
+        if (plater->is_background_process_slicing()) return {{"error", "slicing"}};
+        if (plates.get_curr_plate_index() != index) {
+            if (plater->select_plate(index, false) != 0) return {{"error", "select_failed"}};
+            api_notify("Selected plate " + std::to_string(index + 1));
+        }
+        sync_slice_state_to_current_plate("slice.plate_changed");
+        return {{"selected", true},
+                {"current", plates.get_curr_plate_index()},
+                {"plate", plate_json(plates, index, plater->model())}};
+    });
+    if (r.contains("error")) {
+        if (r["error"] == "unknown_plate") return { 404, r };
+        if (r["error"] == "slicing")       return { 409, r };
+        return { 422, r };
+    }
+    return { 200, r };
+}
+
+// DELETE /plates/{i} - the objects it held are not deleted: Plater::delete_plate
+// parks them beside the bed, as the toolbar does. The count is reported back.
+Response Controller::handle_delete_plate(int index)
+{
+    nlohmann::json r = run_on_ui([this, index]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        PartPlateList &plates = plater->get_partplate_list();
+        if (index < 0 || index >= plates.get_plate_count())
+            return {{"error", "unknown_plate"}, {"count", plates.get_plate_count()}};
+        if (!plater->can_delete_plate()) return {{"error", "last_plate"}};
+        if (plater->is_background_process_slicing()) return {{"error", "slicing"}};
+        int held = 0;
+        {
+            PartPlate *p = plates.get_plate(index);
+            const Model &model = plater->model();
+            for (size_t oi = 0; oi < model.objects.size(); ++oi)
+                for (size_t ii = 0; ii < model.objects[oi]->instances.size(); ++ii)
+                    if (p->contain_instance((int) oi, (int) ii)) ++held;
+        }
+        if (plater->delete_plate(index) != 0) return {{"error", "delete_failed"}};
+        sync_slice_state_to_current_plate("slice.plate_changed");
+        api_notify("Deleted plate " + std::to_string(index + 1) +
+                   (held > 0 ? " (" + std::to_string(held) + " object(s) moved off-plate)" : std::string()));
+        return {{"deleted", true}, {"index", index},
+                {"count", plates.get_plate_count()},
+                {"current", plates.get_curr_plate_index()},
+                {"objects_moved_off_plate", held}};
+    });
+    if (r.contains("error")) {
+        if (r["error"] == "unknown_plate") return { 404, r };
+        if (r["error"] == "slicing")       return { 409, r };
+        return { 422, r };
+    }
+    return { 200, r };
+}
+
+// POST /objects/{id}/plate  body {"plate": <index>, "instance": 0}
+// Moves one instance onto a plate. Coming from another plate it keeps its
+// position relative to that plate (front-left of plate 1 -> front-left of
+// plate 2); coming from off-plate it lands at the target's centre, which is
+// what PartPlateList::add_to_plate does on its own.
+Response Controller::handle_put_object_plate(uint64_t id, const std::string &body)
+{
+    nlohmann::json in = nlohmann::json::parse(body); // parse_error -> 400 in dispatch
+    if (!in.is_object() || !in.contains("plate") || !in["plate"].is_number_integer())
+        return { 400, {{"error", "missing_plate"},
+                       {"detail", "body {\"plate\": <0-based index from GET /plates>, \"instance\": 0}"}} };
+    const int plate_idx = in["plate"].get<int>();
+    if (in.contains("instance") && !in["instance"].is_number_integer())
+        return { 400, {{"error", "instance_must_be_integer"}} };
+    const int inst_idx = in.value("instance", 0);
+    if (plate_idx < 0 || inst_idx < 0) return { 400, {{"error", "negative_index"}} };
+
+    nlohmann::json r = run_on_ui([this, id, plate_idx, inst_idx]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        PartPlateList &plates = plater->get_partplate_list();
+        const int oi = find_object_index(plater->model(), id);
+        if (oi < 0) { api_notify("Object not found", true); return {{"error", "unknown_object"}}; }
+        ModelObject *mo = plater->model().objects[oi];
+        if (inst_idx >= (int) mo->instances.size())
+            return {{"error", "unknown_instance"}, {"instances", (unsigned) mo->instances.size()}};
+        PartPlate *target = plates.get_plate(plate_idx);
+        if (target == nullptr) return {{"error", "unknown_plate"}, {"count", plates.get_plate_count()}};
+        if (target->is_locked()) return {{"error", "plate_locked"}, {"plate", plate_idx}};
+        if (plater->is_background_process_slicing()) return {{"error", "slicing"}};
+
+        const int from = plates.find_instance(oi, inst_idx);   // -1: off every plate
+        PartPlate *source = from >= 0 ? plates.get_plate(from) : nullptr;
+        // The window does not let an object be dragged off a locked plate either.
+        if (source != nullptr && from != plate_idx && source->is_locked())
+            return {{"error", "plate_locked"}, {"plate", from}};
+        ModelInstance *mi = mo->instances[inst_idx];
+        if (from == plate_idx) {
+            auto off = mi->get_offset();
+            return {{"moved", false}, {"already_on_plate", true}, {"id", id}, {"instance", inst_idx},
+                    {"plate", plate_idx}, {"offset", {off.x(), off.y(), off.z()}}};
+        }
+        plater->take_snapshot("move to plate");
+        const bool relative = from >= 0;
+        Vec3d keep = mi->get_offset();
+        if (relative) keep -= plates.get_plate(from)->get_origin();
+        if (plates.add_to_plate(oi, inst_idx, plate_idx) != 0) return {{"error", "move_failed"}};
+        if (relative) {
+            mi->set_offset(target->get_origin() + keep);
+            mo->invalidate_bounding_box();
+        }
+        // add_to_plate only drops the instance from the old plate's list. Dragging an
+        // object away in the window also marks that plate's slice stale and its
+        // thumbnails dirty (PartPlateList::notify_instance_update); without this,
+        // GET /gcode on the old plate would still return G-code that prints the
+        // object that just left it.
+        if (source != nullptr) {
+            source->update_slice_result_valid_state(false);
+            source->thumbnail_data.reset();
+            source->no_light_thumbnail_data.reset();
+            source->top_thumbnail_data.reset();
+            source->pick_thumbnail_data.reset();
+        }
+        plates.notify_instance_update(oi, inst_idx); // re-check inside/outside on the new plate
+        plater->changed_object(oi);
+        // The sidebar object list groups objects by plate; a drag refreshes it the same way.
+        wxGetApp().obj_list()->update_plate_values_for_items();
+        sync_slice_state_to_current_plate("slice.plate_changed");
+        api_notify("Moved '" + mo->name + "' to plate " + std::to_string(plate_idx + 1));
+        auto off = mi->get_offset();
+        return {{"moved", true}, {"id", id}, {"instance", inst_idx},
+                {"plate", plates.find_instance(oi, inst_idx)}, {"from_plate", from},
+                {"offset", {off.x(), off.y(), off.z()}}};
+    });
+    if (r.contains("error")) {
+        const std::string e = r["error"].get<std::string>();
+        if (e == "unknown_object" || e == "unknown_plate" || e == "unknown_instance") return { 404, r };
+        if (e == "slicing") return { 409, r };
+        return { 422, r };
+    }
+    return { 200, r };
+}
+
 Response Controller::dispatch(const Request &req)
 {
     try {
@@ -2020,6 +2301,33 @@ Response Controller::dispatch(const Request &req)
         if (is("POST", "/api/v1/arrange"))      return handle_arrange();
         if (is("POST", "/api/v1/orient"))       return handle_orient();
         if (is("GET",  "/api/v1/jobs/status"))  return handle_jobs_status();
+        if (is("GET",  "/api/v1/plates"))       return handle_get_plates();
+        if (is("POST", "/api/v1/plates")) {
+            try { return handle_create_plate(req.body); }
+            catch (const nlohmann::json::parse_error &) { return { 400, {{"error", "invalid_json"}} }; }
+        }
+        {
+            // plate sub-routes: /api/v1/plates/<index> and /api/v1/plates/<index>/<action>
+            // ("plates/", distinct from the GET /api/v1/plate/render route above)
+            static const std::string pfx = "/api/v1/plates/";
+            std::string path = t.substr(0, t.find('?'));
+            if (path.size() > pfx.size() && path.compare(0, pfx.size(), pfx) == 0) {
+                std::string rest = path.substr(pfx.size());
+                size_t slash = rest.find('/');
+                std::string idx_str = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+                std::string action  = (slash == std::string::npos) ? std::string() : rest.substr(slash + 1);
+                int idx = -1;
+                try {
+                    size_t used = 0;
+                    idx = std::stoi(idx_str, &used);
+                    if (used != idx_str.size() || idx < 0) idx = -1;
+                } catch (...) { idx = -1; }
+                if (idx < 0) return { 400, {{"error", "bad_plate_index"}} };
+                if (req.method == "DELETE" && action.empty())  return handle_delete_plate(idx);
+                if (req.method == "POST"   && action == "select") return handle_select_plate(idx);
+                return { 404, {{"error", "not_found"}} };
+            }
+        }
         {
             // M4b object sub-routes: /api/v1/objects/<id> and /api/v1/objects/<id>/<action>
             static const std::string pfx = "/api/v1/objects/";
@@ -2040,6 +2348,10 @@ Response Controller::dispatch(const Request &req)
                 }
                 if (req.method == "POST" && action == "duplicate")
                     return handle_duplicate_object(oid);
+                if (req.method == "POST" && action == "plate") {
+                    try { return handle_put_object_plate(oid, req.body); }
+                    catch (const nlohmann::json::parse_error &) { return { 400, {{"error", "invalid_json"}} }; }
+                }
                 if (req.method == "PUT" && action == "config") {
                     try { return handle_put_object_config(oid, req.body); }
                     catch (const nlohmann::json::parse_error &) { return { 400, {{"error", "invalid_json"}} }; }
