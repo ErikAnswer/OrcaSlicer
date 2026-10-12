@@ -281,7 +281,12 @@ curl -X POST -H "X-Api-Token: $TOK" -H "Content-Type: application/json" \
 from another plate keeps its position relative to that plate (front-left of plate 1
 lands front-left of plate 2); one coming from off-plate goes to the target's centre.
 Already on that plate: `200 {"moved": false, "already_on_plate": true}`. The plate
-it left is marked unsliced, as a drag in the window does. Errors:
+it left is marked unsliced, as a drag in the window does. If keeping the relative
+position would put it outside the target (it straddled the old plate's edge), it is
+centred instead. `POST /objects/{id}/transform` and `/duplicate` also re-check which
+plate the object (or the new copy) sits on, so an object moved onto another plate by
+coordinates is sliced with that plate. A plate's deleted objects are parked where the
+next plate appears, so `POST /plates` straight after a delete picks them back up. Errors:
 `404 unknown_object | unknown_plate | unknown_instance`, `422 plate_locked` (the
 target or the plate it sits on is locked; `plate` names which) `| move_failed`,
 `409 slicing`, `400 missing_plate`.

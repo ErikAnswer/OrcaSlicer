@@ -1884,7 +1884,16 @@ Response Controller::handle_transform_object(uint64_t id, const std::string &bod
         if (has_t) mi->set_offset(mi->get_offset() + tr);
         if (has_r) mi->set_rotation(mi->get_rotation() + ro * 0.017453292519943295); // deg->rad
         if (has_s) mi->set_scaling_factor(sc);
+        mo->invalidate_bounding_box();
+        // plates: re-check which plate the instance sits on, as a drag in the window
+        // does (GLCanvas3D::do_move/do_rotate/do_scale). Without it an object moved
+        // onto another plate by coordinates stayed in its old plate's list: that plate
+        // kept trying to slice it and the new one ignored it. is_new=true: a plate in
+        // spiral-vase mode applies its vase settings to the object without the drag's
+        // question dialog, which nothing could answer from an API call.
+        wxGetApp().plater()->get_partplate_list().notify_instance_update(idx, 0, true);
         plater->changed_object(idx);
+        wxGetApp().obj_list()->update_plate_values_for_items();
         api_notify(std::string(has_t ? "Moved" : (has_r ? "Rotated" : "Resized")) + " '" + mo->name + "'");
         auto off = mi->get_offset(); auto rot = mi->get_rotation(); auto scl = mi->get_scaling_factor();
         return {{"id", id}, {"transform", {
@@ -1908,7 +1917,10 @@ Response Controller::handle_duplicate_object(uint64_t id)
         const ModelInstance *src = mo->instances.front();
         Vec3d off = src->get_offset() + Vec3d(10.0, 10.0, 0.0);
         mo->add_instance(off, src->get_scaling_factor(), src->get_rotation(), src->get_mirror());
+        // plates: give the new copy to the plate it landed on (see handle_transform_object).
+        wxGetApp().plater()->get_partplate_list().notify_instance_update(idx, (int) mo->instances.size() - 1, true);
         plater->changed_object(idx);
+        wxGetApp().obj_list()->update_plate_values_for_items();
         api_notify("Duplicated '" + mo->name + "'");
         return {{"duplicated", true}, {"id", id}, {"instances", (unsigned) mo->instances.size()}};
     });
@@ -2211,9 +2223,16 @@ Response Controller::handle_put_object_plate(uint64_t id, const std::string &bod
                     {"plate", plate_idx}, {"offset", {off.x(), off.y(), off.z()}}};
         }
         plater->take_snapshot("move to plate");
-        const bool relative = from >= 0;
+        // Keep the position relative to the old plate only when the object really sits
+        // on it (a plate's list can lag behind its geometry, e.g. after a GUI edit).
         Vec3d keep = mi->get_offset();
-        if (relative) keep -= plates.get_plate(from)->get_origin();
+        bool relative = false;
+        if (source != nullptr) {
+            const BoundingBoxf3 sb = source->get_build_volume();
+            relative = keep.x() >= sb.min.x() && keep.x() <= sb.max.x() &&
+                       keep.y() >= sb.min.y() && keep.y() <= sb.max.y();
+        }
+        if (relative) keep -= source->get_origin();
         if (plates.add_to_plate(oi, inst_idx, plate_idx) != 0) return {{"error", "move_failed"}};
         if (relative) {
             mi->set_offset(target->get_origin() + keep);
@@ -2231,7 +2250,18 @@ Response Controller::handle_put_object_plate(uint64_t id, const std::string &bod
             source->top_thumbnail_data.reset();
             source->pick_thumbnail_data.reset();
         }
-        plates.notify_instance_update(oi, inst_idx); // re-check inside/outside on the new plate
+        // Re-check inside/outside on the new plate. is_new=true for the same reason as
+        // in handle_transform_object: no spiral-vase question dialog from an API call.
+        plates.notify_instance_update(oi, inst_idx, true);
+        if (plates.find_instance(oi, inst_idx) != plate_idx) {
+            // The relative position put it outside the target (it straddled the old
+            // plate's edge): centre it on the target instead.
+            Vec3d c = target->get_center_origin();
+            c.z() = mi->get_offset().z();
+            mi->set_offset(c);
+            mo->invalidate_bounding_box();
+            plates.notify_instance_update(oi, inst_idx, true);
+        }
         plater->changed_object(oi);
         // The sidebar object list groups objects by plate; a drag refreshes it the same way.
         wxGetApp().obj_list()->update_plate_values_for_items();
