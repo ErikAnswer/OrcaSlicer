@@ -93,6 +93,7 @@ Base URL: `http://<host>:13130/api/v1`
 | GET | `/activity` | The MCP panel's timeline of this project: the API's changes, what was undone, restore points |
 | POST | `/activity/note` | One row the connector adds to the MCP panel (`{"kind": "slice" \| "refused" \| "note", "text", "value"?, "detail"?}`) |
 | GET | `/user_changes?since=` | What the user changed outside the API since a journal seq (hand edits, preset switches, objects, plates, projects, panel undos) |
+| POST | `/model` | Load a model: `{"path": "<file on this machine>"}` or `{"url": "http://impresora3d.casa/..."}` (home library hosts only; .stl/.obj/.step/.stp, no .3mf) |
 
 ### GET /status
 
