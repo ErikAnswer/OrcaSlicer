@@ -26,6 +26,7 @@
 #include <miniz.h>                        // plate_render: RGBA -> PNG in memory
 #include "libslic3r/FlushVolCalc.hpp"      // project scope: g_max_flush_volume bound
 #include "slic3r/GUI/WipeTowerDialog.hpp"  // project scope: is_flush_config_modified
+#include "slic3r/Utils/Http.hpp"              // POST /model {"url"}: fetch a mesh from the home library
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +43,8 @@
 #include <vector>
 
 #include <boost/filesystem.hpp>
+#include <boost/nowide/fstream.hpp>
+#include <boost/algorithm/string/predicate.hpp>
 
 namespace Slic3r { namespace GUI { namespace RemoteAPI {
 
@@ -1213,12 +1216,107 @@ Response Controller::handle_slice_cancel()
 // (deflection defaults come from app config); the multipart-object prompt in
 // Plater::load_files is skipped while an API task is on the stack (keeps the
 // solids as separate objects, the dialog's No answer).
+namespace {
+
+// URL loads are limited to the home model library and to plain meshes: a .3mf
+// carries print settings (post_process, *_gcode) and stays a local, human choice.
+const std::set<std::string> MODEL_URL_HOSTS = {"impresora3d.casa", "192.168.1.17", "impresora3d.tail5f3ef6.ts.net"};
+const std::vector<std::string> MODEL_URL_EXTENSIONS = {".stl", ".obj", ".step", ".stp"};
+constexpr size_t MODEL_DOWNLOAD_LIMIT = size_t(512) * 1024 * 1024;
+
+std::string to_lower_ascii(std::string text)
+{
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    return text;
+}
+
+std::string model_url_host(const std::string &url)
+{
+    const size_t start = url.find("://");
+    if (start == std::string::npos)
+        return {};
+    const size_t      end       = url.find_first_of("/?#", start + 3);
+    const std::string authority = url.substr(start + 3, end == std::string::npos ? std::string::npos : end - (start + 3));
+    if (authority.find('@') != std::string::npos)
+        return {};
+    return to_lower_ascii(authority.substr(0, authority.find(':')));
+}
+
+std::string model_filename_from_url(const std::string &url)
+{
+    const std::string without_query = url.substr(0, url.find_first_of("?#"));
+    const size_t      host_start    = without_query.find("://");
+    if (host_start == std::string::npos || without_query.find('/', host_start + 3) == std::string::npos)
+        return {};
+    std::string name = Http::url_decode(without_query.substr(without_query.find_last_of('/') + 1));
+    for (char &c : name)
+        if (static_cast<unsigned char>(c) < 0x20 || std::string("<>:\"/\\|?*").find(c) != std::string::npos)
+            c = '_';
+    return name;
+}
+
+bool is_model_url_extension(const std::string &filename)
+{
+    const std::string lower = to_lower_ascii(filename);
+    return std::any_of(MODEL_URL_EXTENSIONS.begin(), MODEL_URL_EXTENSIONS.end(),
+                       [&lower](const std::string &ext) { return boost::ends_with(lower, ext); });
+}
+
+// Each download gets its own temp folder so the plate loads a real local file,
+// exactly like a "path" load, and two models with the same name never clash.
+nlohmann::json download_model(const std::string &url, const std::string &filename, std::string &local_path)
+{
+    namespace fs = boost::filesystem;
+    boost::system::error_code ec;
+    const fs::path dir = fs::temp_directory_path() / "OrcaSlicer-remote-api" / fs::unique_path("%%%%-%%%%-%%%%");
+    fs::create_directories(dir, ec);
+    if (ec)
+        return {{"error", "download_failed"}, {"detail", ec.message()}};
+
+    std::string body;
+    std::string error;
+    unsigned    status = 0;
+    bool        done   = false;
+    Http::get(url)
+        .timeout_connect(10)
+        .timeout_max(300)
+        .size_limit(MODEL_DOWNLOAD_LIMIT)
+        .on_complete([&](std::string b, unsigned s) { body = std::move(b); status = s; done = true; })
+        .on_error([&](std::string, std::string e, unsigned s) { error = std::move(e); status = s; })
+        .perform_sync();
+    if (!done)
+        return {{"error", "download_failed"}, {"detail", error}, {"http_status", status}};
+
+    const fs::path target = dir / filename;
+    boost::nowide::ofstream out(target.string(), std::ios::binary);
+    out.write(body.data(), static_cast<std::streamsize>(body.size()));
+    out.close();
+    if (!out)
+        return {{"error", "download_failed"}, {"detail", "could not write " + target.string()}};
+    local_path = target.string();
+    return {};
+}
+
+} // namespace
+
 Response Controller::handle_load_model(const std::string &body)
 {
     nlohmann::json in = nlohmann::json::parse(body); // parse_error -> 400 in dispatch route
-    if (!in.is_object() || !in.contains("path") || !in["path"].is_string())
+    std::string path;
+    std::string url;
+    if (in.is_object() && in.contains("url") && in["url"].is_string()) {
+        url = in["url"].get<std::string>();
+        if ((!boost::istarts_with(url, "http://") && !boost::istarts_with(url, "https://"))
+            || MODEL_URL_HOSTS.count(model_url_host(url)) == 0)
+            return { 403, {{"error", "url_not_allowed"}, {"detail", "URL loads only accept the home model library"}} };
+        path = model_filename_from_url(url);
+        if (!is_model_url_extension(path))
+            return { 422, {{"error", "unsupported_format"}, {"detail", "URL loads support .stl, .obj, .step, .stp"}} };
+    } else if (in.is_object() && in.contains("path") && in["path"].is_string()) {
+        path = in["path"].get<std::string>();
+    } else {
         return { 400, {{"error", "missing_path"}} };
-    std::string path = in["path"].get<std::string>();
+    }
 
     std::string lower = path;
     std::transform(lower.begin(), lower.end(), lower.begin(),
@@ -1232,6 +1330,16 @@ Response Controller::handle_load_model(const std::string &body)
         api_notify("Can't load " + boost::filesystem::path(path).filename().string() + ": unsupported format", true);
         return { 422, {{"error", "unsupported_format"},
                        {"detail", "remote load supports .stl, .obj, .3mf, .step, .stp"}} };
+    }
+
+    if (!url.empty()) {
+        std::string local_path;
+        nlohmann::json err = download_model(url, path, local_path);
+        if (!err.is_null()) {
+            api_notify("Couldn't download " + path, true);
+            return { 502, err };
+        }
+        path = local_path;
     }
 
     // 120 s instead of the default 10: OCCT read + tessellation of a real-world
