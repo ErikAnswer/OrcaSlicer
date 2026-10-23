@@ -45,7 +45,7 @@ Base URL: `http://<host>:13130/api/v1`
 | POST | `/plates/{i}/select` | Make plate `i` the current one |
 | DELETE | `/plates/{i}` | Delete plate `i` (its objects are parked beside the bed, not deleted) |
 | POST | `/objects/{id}/plate` | Move an object onto plate `i` |
-| POST | `/model` | Load a model: `{"path": "<file on this machine>"}` or `{"url": "http://impresora3d.casa/..."}` (home library hosts only; .stl/.obj/.step/.stp, no .3mf) |
+| POST | `/model` | Load a model: `{"path": "<file on this machine>"}` or `{"url": "http://impresora3d.casa/api/download?root=out&path=<file>"}` (home library hosts only; the name comes from the last path segment or the `path` parameter; .stl/.obj/.step/.stp, no .3mf) |
 
 ### GET /status
 

@@ -1242,24 +1242,43 @@ std::string model_url_host(const std::string &url)
     return to_lower_ascii(authority.substr(0, authority.find(':')));
 }
 
-std::string model_filename_from_url(const std::string &url)
-{
-    const std::string without_query = url.substr(0, url.find_first_of("?#"));
-    const size_t      host_start    = without_query.find("://");
-    if (host_start == std::string::npos || without_query.find('/', host_start + 3) == std::string::npos)
-        return {};
-    std::string name = Http::url_decode(without_query.substr(without_query.find_last_of('/') + 1));
-    for (char &c : name)
-        if (static_cast<unsigned char>(c) < 0x20 || std::string("<>:\"/\\|?*").find(c) != std::string::npos)
-            c = '_';
-    return name;
-}
-
 bool is_model_url_extension(const std::string &filename)
 {
     const std::string lower = to_lower_ascii(filename);
     return std::any_of(MODEL_URL_EXTENSIONS.begin(), MODEL_URL_EXTENSIONS.end(),
                        [&lower](const std::string &ext) { return boost::ends_with(lower, ext); });
+}
+
+std::string basename_of(const std::string &path)
+{
+    const size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+// The file name is the last path segment, or, for download endpoints such as the
+// library's /api/download?root=out&path=<file>, the base name of the "path" parameter.
+std::string model_filename_from_url(const std::string &url)
+{
+    const size_t      fragment      = url.find('#');
+    const std::string without_frag  = url.substr(0, fragment);
+    const size_t      query_start   = without_frag.find('?');
+    const std::string without_query = without_frag.substr(0, query_start);
+    const size_t      host_start    = without_query.find("://");
+    if (host_start == std::string::npos || without_query.find('/', host_start + 3) == std::string::npos)
+        return {};
+
+    std::string name = Http::url_decode(basename_of(without_query));
+    if (!is_model_url_extension(name) && query_start != std::string::npos) {
+        std::istringstream query(without_frag.substr(query_start + 1));
+        std::string        param;
+        while (std::getline(query, param, '&'))
+            if (boost::starts_with(param, "path="))
+                name = basename_of(Http::url_decode(param.substr(5)));
+    }
+    for (char &c : name)
+        if (static_cast<unsigned char>(c) < 0x20 || std::string("<>:\"/\\|?*").find(c) != std::string::npos)
+            c = '_';
+    return name;
 }
 
 // Each download gets its own temp folder so the plate loads a real local file,
