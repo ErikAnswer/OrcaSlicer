@@ -5663,7 +5663,7 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
         try { return std::stol(m[1].str()); } catch (...) { return -1; }
     };
 
-    auto http = Http::get("https://api.github.com/repos/MaxEllis/OrcaSlicer/releases/latest");
+    auto http = Http::get("https://api.github.com/repos/ErikAnswer/OrcaSlicer/releases/latest");
     http.header("accept", "application/vnd.github.v3+json")
         .timeout_connect(5)
         .timeout_max(10)
