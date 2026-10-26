@@ -2117,6 +2117,145 @@ Response Controller::handle_put_object_config(uint64_t id, const std::string &bo
     return { r["errors"].empty() ? 200 : 422, r };
 }
 
+namespace {
+
+// Sends only reach the home print queue (it emulates a Flashforge printer and
+// holds every job until a person confirms the bed and starts it), never a printer.
+const std::set<std::string> QUEUE_HOSTS = {"192.168.1.17", "impresora3d.casa", "impresora3d.tail5f3ef6.ts.net"};
+
+std::string print_host_name(std::string host)
+{
+    if (const size_t scheme = host.find("://"); scheme != std::string::npos)
+        host = host.substr(scheme + 3);
+    host = host.substr(0, host.find_first_of("/?#"));
+    if (host.find('@') != std::string::npos)
+        return {};
+    return to_lower_ascii(host.substr(0, host.find(':')));
+}
+
+const std::map<std::string, CalibMode> CALIBRATION_TYPES = {
+    {"pa_line", CalibMode::Calib_PA_Line},
+    {"pa_pattern", CalibMode::Calib_PA_Pattern},
+    {"pa_tower", CalibMode::Calib_PA_Tower},
+    {"flow_rate", CalibMode::Calib_Flow_Rate},
+    {"temp_tower", CalibMode::Calib_Temp_Tower},
+    {"max_volumetric_speed", CalibMode::Calib_Vol_speed_Tower},
+    {"retraction", CalibMode::Calib_Retraction_tower},
+    {"vfa", CalibMode::Calib_VFA_Tower},
+};
+
+} // namespace
+
+// POST /api/v1/calibration {"type", "start", "end", "step"} or, for flow_rate,
+// {"type": "flow_rate", "pass": 1|2, "linear": bool}. The same generators as the
+// Calibration menu; they replace the project, so unsaved work is refused unless
+// "discard_unsaved" is true (otherwise their own "save changes?" dialog would block).
+Response Controller::handle_calibration(const std::string &body)
+{
+    nlohmann::json in = nlohmann::json::parse(body);
+    if (!in.is_object() || !in.contains("type") || !in["type"].is_string())
+        return { 400, {{"error", "missing_type"}} };
+    const auto mode = CALIBRATION_TYPES.find(in["type"].get<std::string>());
+    if (mode == CALIBRATION_TYPES.end()) {
+        nlohmann::json types = nlohmann::json::array();
+        for (const auto &[name, _] : CALIBRATION_TYPES)
+            types.push_back(name);
+        return { 422, {{"error", "unsupported_type"}, {"supported", types}} };
+    }
+
+    Calib_Params params;
+    params.mode          = mode->second;
+    params.start = params.end = params.step = 0;
+    params.freqStartX = params.freqEndX = params.freqStartY = params.freqEndY = 0;
+    params.test_model    = 0;
+    params.print_numbers = in.value("print_numbers", true);
+    const int  flow_pass   = in.value("pass", 1);
+    const bool flow_linear = in.value("linear", false);
+    if (params.mode == CalibMode::Calib_Flow_Rate) {
+        if (flow_pass != 1 && flow_pass != 2)
+            return { 422, {{"error", "invalid_pass"}, {"detail", "pass must be 1 or 2"}} };
+    } else {
+        for (const char *key : {"start", "end", "step"})
+            if (!in.contains(key) || !in[key].is_number())
+                return { 400, {{"error", "missing_range"}, {"detail", "start, end and step are required numbers"}} };
+        params.start = in["start"].get<double>();
+        params.end   = in["end"].get<double>();
+        params.step  = in["step"].get<double>();
+        if (params.start < 0 || params.step < 1e-6 || params.end < params.start + params.step)
+            return { 422, {{"error", "invalid_range"}, {"detail", "need start >= 0, step > 0 and end >= start + step"}} };
+    }
+    const bool discard_unsaved = in.value("discard_unsaved", false);
+
+    nlohmann::json r = run_on_ui([params, flow_pass, flow_linear, discard_unsaved]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        if (!plater->get_ui_job_worker().is_idle())
+            return {{"busy", true}};
+        if (plater->is_project_dirty()) {
+            if (!discard_unsaved)
+                return {{"error", "unsaved_project"}};
+            plater->new_project(true, true);
+        }
+        switch (params.mode) {
+        case CalibMode::Calib_PA_Line:
+        case CalibMode::Calib_PA_Pattern:
+        case CalibMode::Calib_PA_Tower: plater->calib_pa(params); break;
+        case CalibMode::Calib_Flow_Rate: plater->calib_flowrate(flow_linear, flow_pass); break;
+        case CalibMode::Calib_Temp_Tower: plater->calib_temp(params); break;
+        case CalibMode::Calib_Vol_speed_Tower: plater->calib_max_vol_speed(params); break;
+        case CalibMode::Calib_Retraction_tower: plater->calib_retraction(params); break;
+        case CalibMode::Calib_VFA_Tower: plater->calib_VFA(params); break;
+        default: return {{"error", "unsupported_type"}};
+        }
+        nlohmann::json objects = nlohmann::json::array();
+        for (const ModelObject *mo : plater->model().objects)
+            objects.push_back({{"id", (uint64_t) mo->id().id}, {"name", mo->name}});
+        return {{"created", true}, {"objects", objects}};
+    }, /*timeout_s=*/120);
+    if (r.value("busy", false))
+        return { 409, {{"error", "job_running"}} };
+    if (r.contains("error")) {
+        return { r["error"] == "unsaved_project" ? 409 : 422, r };
+    }
+    api_notify("Created a calibration test");
+    return { 200, r };
+}
+
+// POST /api/v1/print/queue: upload the sliced current plate through the selected
+// printer's own Flashforge send path, only when that printer is the home queue.
+Response Controller::handle_send_to_queue()
+{
+    nlohmann::json r = run_on_ui([]() -> nlohmann::json {
+        Plater                   *plater  = wxGetApp().plater();
+        const DynamicPrintConfig &printer = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+        const auto *host_type  = printer.option<ConfigOptionEnum<PrintHostType>>("host_type");
+        const auto *print_host = printer.option<ConfigOptionString>("print_host");
+        if (host_type == nullptr || host_type->value != htFlashforge || print_host == nullptr
+            || QUEUE_HOSTS.count(print_host_name(print_host->value)) == 0)
+            return {{"error", "not_queue_printer"}, {"detail", "select the printer preset that sends to the home queue"}};
+        if (plater->model().objects.empty())
+            return {{"error", "empty"}};
+        if (!plater->get_partplate_list().get_curr_plate()->is_slice_result_valid())
+            return {{"error", "not_sliced"}};
+        std::string                        error;
+        std::map<std::string, std::string> upload_info;
+        if (!plater->remote_api_send_to_flashforge(error, upload_info))
+            return {{"error", "send_failed"}, {"detail", error}};
+        nlohmann::json upload = nlohmann::json::object();
+        for (const auto &[key, value] : upload_info)
+            upload[key] = value;
+        return {{"sent", true}, {"upload", upload}};
+    }, /*timeout_s=*/120);
+    if (r.contains("error")) {
+        const std::string error = r["error"].get<std::string>();
+        const int status = error == "not_queue_printer" ? 403 : error == "not_sliced" ? 409 :
+                           error == "send_failed" ? 502 : 422;
+        api_notify("Couldn't send the plate to the queue", true);
+        return { status, r };
+    }
+    api_notify("Sent the plate to the print queue");
+    return { 202, r };
+}
+
 Response Controller::handle_arrange()
 {
     nlohmann::json r = run_on_ui([]() -> nlohmann::json {
@@ -2431,6 +2570,14 @@ Response Controller::dispatch(const Request &req)
         if (is("POST", "/api/v1/slice"))        return handle_slice();
         if (is("GET",  "/api/v1/slice/status")) return handle_slice_status();
         if (is("POST", "/api/v1/slice/cancel")) return handle_slice_cancel();
+        if (is("POST", "/api/v1/calibration")) {
+            try {
+                return handle_calibration(req.body);
+            } catch (const nlohmann::json::exception &) {
+                return { 400, {{"error", "invalid_json"}} };
+            }
+        }
+        if (is("POST", "/api/v1/print/queue")) return handle_send_to_queue();
         if (is("POST", "/api/v1/model")) {
             try {
                 return handle_load_model(req.body);

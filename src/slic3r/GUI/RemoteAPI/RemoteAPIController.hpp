@@ -79,6 +79,8 @@ private:
     Response handle_select_plate(int index);                // plates: POST /plates/{i}/select
     Response handle_delete_plate(int index);                // plates: DELETE /plates/{i}
     Response handle_put_object_plate(uint64_t id, const std::string &body); // plates: POST /objects/{id}/plate
+    Response handle_calibration(const std::string &body);   // POST /calibration
+    Response handle_send_to_queue();                         // POST /print/queue
 
     // Mutate m_slice under the lock and broadcast a snapshot (event_name) to WS clients.
     void set_slice_state(const std::function<void(SliceState&)> &mut, const char *event_name);

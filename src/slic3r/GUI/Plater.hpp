@@ -529,6 +529,9 @@ public:
      * -2: send all gcode to target machine */
     int send_gcode(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
     void send_gcode_legacy(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
+    // orca-mcp: Remote API send of the current plate to a Flashforge host, with the
+    // defaults and automatic slot mapping of the send dialog but without showing it.
+    bool remote_api_send_to_flashforge(std::string &error, std::map<std::string, std::string> &upload_info);
     int export_config_3mf(int plate_idx = -1, Export3mfProgressFn proFn = nullptr);
     //BBS jump to nonitor after print job finished
     void send_calibration_job_finished(wxCommandEvent &evt);

@@ -16316,6 +16316,124 @@ void Plater::send_gcode_legacy(int plate_idx, Export3mfProgressFn proFn)
 
     p->export_gcode(fs::path(), false, std::move(upload_job));
 }
+bool Plater::remote_api_send_to_flashforge(std::string &error, std::map<std::string, std::string> &upload_info)
+{
+    DynamicPrintConfig *physical_printer_config = &wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    if (p->model.objects.empty()) {
+        error = "the plate is empty";
+        return false;
+    }
+    PrintHostJob upload_job(physical_printer_config);
+    auto        *flashforge_host = upload_job.empty() ? nullptr : dynamic_cast<Flashforge *>(upload_job.printhost.get());
+    if (flashforge_host == nullptr) {
+        error = "the selected printer has no Flashforge host";
+        return false;
+    }
+    const auto *use_3mf_opt = physical_printer_config->option<ConfigOptionBool>("use_3mf");
+    const bool  use_3mf     = use_3mf_opt != nullptr && use_3mf_opt->value;
+    upload_job.upload_data.use_3mf = use_3mf;
+    const int plate_idx = get_partplate_list().get_curr_plate_index();
+
+    fs::path default_output_file;
+    try {
+        unsigned int state = p->update_restart_background_process(false, false);
+        if (state & priv::UPDATE_BACKGROUND_PROCESS_INVALID) {
+            error = "the plate cannot be sliced as it is";
+            return false;
+        }
+        default_output_file = p->background_process.output_filepath_for_project(into_path(p->get_project_filename(".3mf")));
+    } catch (const std::exception &ex) {
+        error = ex.what();
+        return false;
+    }
+    default_output_file = fs::path(Slic3r::fold_utf8_to_ascii(default_output_file.string()));
+    if (use_3mf)
+        default_output_file.replace_extension(".gcode.3mf");
+
+    wxArrayString groups;
+    wxArrayString storage_paths;
+    wxArrayString storage_names;
+    try {
+        upload_job.printhost->get_groups(groups);
+        upload_job.printhost->get_storage(storage_paths, storage_names);
+    } catch (const std::exception &ex) {
+        error = ex.what();
+        return false;
+    }
+
+    std::vector<FlashforgeMaterialSlot> slots;
+    bool                                supports_material_station = false;
+    wxString                            msg;
+    if (!flashforge_host->fetch_material_slots(slots, &supports_material_station, msg)) {
+        error = msg.empty() ? std::string("unable to read the printer's material slots") : into_u8(msg);
+        return false;
+    }
+
+    std::vector<FilamentInfo> project_filaments;
+    {
+        DynamicPrintConfig cfg             = wxGetApp().preset_bundle->full_config();
+        const auto        *filament_color  = dynamic_cast<const ConfigOptionStrings *>(cfg.option("filament_colour"));
+        const auto        *filament_id_opt = dynamic_cast<const ConfigOptionStrings *>(cfg.option("filament_ids"));
+        PlateDataPtrs      plate_data_list;
+        p->partplate_list.store_to_3mf_structure(plate_data_list, true, PLATE_CURRENT_IDX);
+        PlateData *selected_plate_data = plate_idx >= 0 && plate_idx < static_cast<int>(plate_data_list.size()) ?
+                                             plate_data_list[plate_idx] :
+                                             nullptr;
+        if (selected_plate_data == nullptr && !plate_data_list.empty())
+            selected_plate_data = plate_data_list.front();
+        if (selected_plate_data != nullptr)
+            project_filaments = selected_plate_data->slice_filaments_info;
+        if (project_filaments.empty()) {
+            if (PartPlate *plate = get_partplate_list().get_plate(plate_idx); plate != nullptr)
+                project_filaments = plate->get_slice_filaments_info();
+        }
+        for (auto &filament : project_filaments) {
+            if (filament.id < 0)
+                continue;
+            std::string display_filament_type;
+            try {
+                filament.type = cfg.get_filament_type(display_filament_type, filament.id);
+            } catch (...) {
+            }
+            if (filament.type.empty())
+                filament.type = display_filament_type.empty() ? std::string("Unknown") : display_filament_type;
+            filament.filament_id = filament_id_opt ? filament_id_opt->get_at(static_cast<size_t>(filament.id)) : "";
+            filament.color       = filament_color ? filament_color->get_at(static_cast<size_t>(filament.id)) : "#FFFFFF";
+            if (filament.color.empty())
+                filament.color = "#FFFFFF";
+        }
+        release_PlateData_list(plate_data_list);
+    }
+
+    auto dialog = std::make_unique<FlashforgePrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
+                                                                  storage_paths, storage_names, false, flashforge_host,
+                                                                  supports_material_station, std::move(slots), project_filaments);
+    dialog->init();
+    upload_info = dialog->extendedInfo();
+    if (upload_info["useMatlStation"] == "1" && std::stoul(upload_info["gcodeToolCnt"]) < project_filaments.size()) {
+        error = "not every filament of the plate matches a loaded printer slot";
+        return false;
+    }
+
+    upload_job.switch_to_device_tab        = false;
+    upload_job.upload_data.upload_path     = dialog->filename();
+    upload_job.upload_data.post_action     = PrintHostPostUploadAction::None;
+    upload_job.upload_data.group           = dialog->group();
+    upload_job.upload_data.storage         = dialog->storage();
+    upload_job.upload_data.extended_info   = upload_info;
+    if (use_3mf) {
+        upload_job.upload_data.extended_info["plateindex"] = std::to_string(plate_idx + 1);
+        if (send_gcode(plate_idx, nullptr) < 0) {
+            error = "the sliced plate could not be packaged";
+            return false;
+        }
+        upload_job.upload_data.source_path = p->m_print_job_data._3mf_path;
+    }
+    upload_info["file"] = upload_job.upload_data.upload_path.string();
+    p->export_gcode(fs::path(), false, std::move(upload_job));
+    return true;
+}
+
 int Plater::send_gcode(int plate_idx, Export3mfProgressFn proFn)
 {
     int result = 0;

@@ -46,6 +46,8 @@ Base URL: `http://<host>:13130/api/v1`
 | DELETE | `/plates/{i}` | Delete plate `i` (its objects are parked beside the bed, not deleted) |
 | POST | `/objects/{id}/plate` | Move an object onto plate `i` |
 | POST | `/model` | Load a model: `{"path": "<file on this machine>"}` or `{"url": "http://impresora3d.casa/api/download?root=out&path=<file>"}` (home library hosts only; the name comes from the last path segment or the `path` parameter; .stl/.obj/.step/.stp, no .3mf) |
+| POST | `/calibration` | Create a calibration test like the Calibration menu: `{"type": "pa_tower", "start": 0, "end": 0.08, "step": 0.002}`; flow_rate takes `{"pass": 1|2, "linear": bool}`. Replaces the project: unsaved work needs `"discard_unsaved": true` |
+| POST | `/print/queue` | Upload the sliced current plate through the printer preset's own Flashforge send (send dialog defaults and automatic slot mapping, no dialog). Only when that printer points at the home print queue |
 
 ### GET /status
 
