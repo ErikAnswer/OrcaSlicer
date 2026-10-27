@@ -2195,15 +2195,19 @@ Response Controller::handle_calibration(const std::string &body)
                 return {{"error", "unsaved_project"}};
             plater->new_project(true, true);
         }
-        switch (params.mode) {
+        // CalibPressureAdvancePattern keeps a reference to these params and reads them again
+        // on every reslice, so they must outlive this call (the menu keeps them in its dialog).
+        static Calib_Params live_params;
+        live_params = params;
+        switch (live_params.mode) {
         case CalibMode::Calib_PA_Line:
         case CalibMode::Calib_PA_Pattern:
-        case CalibMode::Calib_PA_Tower: plater->calib_pa(params); break;
+        case CalibMode::Calib_PA_Tower: plater->calib_pa(live_params); break;
         case CalibMode::Calib_Flow_Rate: plater->calib_flowrate(flow_linear, flow_pass); break;
-        case CalibMode::Calib_Temp_Tower: plater->calib_temp(params); break;
-        case CalibMode::Calib_Vol_speed_Tower: plater->calib_max_vol_speed(params); break;
-        case CalibMode::Calib_Retraction_tower: plater->calib_retraction(params); break;
-        case CalibMode::Calib_VFA_Tower: plater->calib_VFA(params); break;
+        case CalibMode::Calib_Temp_Tower: plater->calib_temp(live_params); break;
+        case CalibMode::Calib_Vol_speed_Tower: plater->calib_max_vol_speed(live_params); break;
+        case CalibMode::Calib_Retraction_tower: plater->calib_retraction(live_params); break;
+        case CalibMode::Calib_VFA_Tower: plater->calib_VFA(live_params); break;
         default: return {{"error", "unsupported_type"}};
         }
         nlohmann::json objects = nlohmann::json::array();
