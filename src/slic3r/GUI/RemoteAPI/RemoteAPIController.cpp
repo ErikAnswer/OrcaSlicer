@@ -3825,6 +3825,15 @@ Response Controller::handle_calibration(const std::string &body)
     if (params.mode == CalibMode::Calib_Flow_Rate) {
         if (flow_pass != 1 && flow_pass != 2)
             return { 422, {{"error", "invalid_pass"}, {"detail", "pass must be 1 or 2"}} };
+    } else if (params.mode == CalibMode::Calib_Temp_Tower) {
+        for (const char *key : {"start", "end"})
+            if (!in.contains(key) || !in[key].is_number())
+                return { 400, {{"error", "missing_range"}, {"detail", "start and end are required numbers"}} };
+        params.start = in["start"].get<double>();
+        params.end   = in["end"].get<double>();
+        params.step  = 5;
+        if (params.start > 500 || params.end < 155 || params.start < params.end + 5)
+            return { 422, {{"error", "invalid_range"}, {"detail", "temp_tower needs start <= 500, end >= 155 and start >= end + 5 (it prints from start down to end in 5 degree blocks)"}} };
     } else {
         for (const char *key : {"start", "end", "step"})
             if (!in.contains(key) || !in[key].is_number())
