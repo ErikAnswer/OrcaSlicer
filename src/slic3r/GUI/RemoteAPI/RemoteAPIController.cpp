@@ -270,6 +270,7 @@ static std::string mcp_reason(const std::string &e, const char *fallback = MCP_T
         {"busy", MCP_T("Busy")},
         {"job_running", MCP_T("Busy")},
         {"unsaved_changes", MCP_T("Unsaved changes")},
+        {"unsaved_project", MCP_T("Unsaved changes")},
         {"no_project_path", MCP_T("Never saved")},
         {"exists", MCP_T("File exists")},
         {"same_path", MCP_T("Same path")},
@@ -3801,6 +3802,7 @@ const std::map<std::string, CalibMode> CALIBRATION_TYPES = {
 // {"type": "flow_rate", "pass": 1|2, "linear": bool}. The same generators as the
 // Calibration menu; they replace the project, so unsaved work is refused unless
 // "discard_unsaved" is true (otherwise their own "save changes?" dialog would block).
+// Like POST /project/new it leaves a restore point and a "New project" row in the MCP panel.
 Response Controller::handle_calibration(const std::string &body)
 {
     nlohmann::json in = nlohmann::json::parse(body);
@@ -3846,13 +3848,20 @@ Response Controller::handle_calibration(const std::string &body)
     }
     const bool discard_unsaved = in.value("discard_unsaved", false);
 
-    nlohmann::json r = run_on_ui([params, flow_pass, flow_linear, discard_unsaved]() -> nlohmann::json {
+    nlohmann::json r = run_on_ui([this, params, flow_pass, flow_linear, discard_unsaved]() -> nlohmann::json {
+        auto refuse = [](nlohmann::json e) -> nlohmann::json {
+            mcp_refused_reply(MCP_T("New project"), e, "POST /calibration");
+            return e;
+        };
         Plater *plater = wxGetApp().plater();
-        if (!plater->get_ui_job_worker().is_idle())
-            return {{"busy", true}};
-        if (plater->is_project_dirty()) {
-            if (!discard_unsaved)
-                return {{"error", "unsaved_project"}};
+        if (plater->is_background_process_slicing()) return refuse({{"error", "slicing"}});
+        if (plater->is_loading_project()) return refuse({{"error", "busy"}});
+        if (!plater->get_ui_job_worker().is_idle()) return refuse({{"error", "job_running"}});
+        const bool dirty = plater->is_project_dirty();
+        if (dirty && !discard_unsaved) return refuse({{"error", "unsaved_project"}});
+        mcp_before_change();
+        if (dirty) {
+            plater->model().set_backup_path("");
             plater->new_project(true, true);
         }
         // CalibPressureAdvancePattern keeps a reference to these params and reads them again
@@ -3870,15 +3879,22 @@ Response Controller::handle_calibration(const std::string &body)
         case CalibMode::Calib_VFA_Tower: plater->calib_VFA(live_params); break;
         default: return {{"error", "unsupported_type"}};
         }
+        sync_slice_state_to_current_plate("slice.plate_changed");
+        {
+            const std::string title = plater->get_project_name().ToUTF8().data();
+            McpRow row = mcp_row("file", MCP_T("New project"), title);
+            row.target = {{"type", "project_new"}, {"name", title}};
+            mcp_record(std::move(row));
+        }
         nlohmann::json objects = nlohmann::json::array();
         for (const ModelObject *mo : plater->model().objects)
             objects.push_back({{"id", (uint64_t) mo->id().id}, {"name", mo->name}});
         return {{"created", true}, {"objects", objects}};
     }, /*timeout_s=*/120);
-    if (r.value("busy", false))
-        return { 409, {{"error", "job_running"}} };
     if (r.contains("error")) {
-        return { r["error"] == "unsaved_project" ? 409 : 422, r };
+        const std::string e = r["error"].get<std::string>();
+        const bool conflict = e == "unsaved_project" || e == "slicing" || e == "busy" || e == "job_running";
+        return { conflict ? 409 : 422, r };
     }
     api_notify("Created a calibration test");
     return { 200, r };
