@@ -177,6 +177,7 @@ struct Http::priv
 
 	std::string curl_error(CURLcode curlcode);
 	std::string body_size_error();
+	std::string redirect_not_followed_error();
 	void http_perform();
 };
 
@@ -447,6 +448,14 @@ std::string Http::priv::body_size_error()
 	return (boost::format("HTTP body data size exceeded limit (%1% bytes)") % limit).str();
 }
 
+std::string Http::priv::redirect_not_followed_error()
+{
+	char *location = nullptr;
+	if (::curl_easy_getinfo(curl, CURLINFO_REDIRECT_URL, &location) == CURLE_OK && location != nullptr)
+		return std::string("redirect not followed (to ") + location + ")";
+	return "redirect not followed";
+}
+
 void Http::priv::http_perform()
 {
 	::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, follow_location ? 1L : 0L);
@@ -537,6 +546,9 @@ void Http::priv::http_perform()
 		//BBS check error http status code
 		else if (http_status >= 400) {
 			if (errorfn) { errorfn(std::move(buffer), std::string(), http_status); }
+		}
+		else if (!follow_location && http_status >= 300 && http_status < 400) {
+			if (errorfn) { errorfn(std::move(buffer), redirect_not_followed_error(), http_status); }
 		}
 	}
 }

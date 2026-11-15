@@ -64,6 +64,8 @@ public:
 	// If the HTTP request could not be made or failed before completion, the `error` arg contains a description
 	// of the error and `http_status` is zero.
 	// If the HTTP request was completed but the response HTTP code is >= 400, `error` is empty and `http_status` contains the response code.
+	// If redirects are not followed (follow_redirects(false)) and the response is a 3xx other than 304, `error` says the redirect
+	// was not followed (and where it pointed) and `http_status` contains the response code.
 	// In either case there may or may not be a body.
 	typedef std::function<void(std::string /* body */, std::string /* error */, unsigned /* http_status */)> ErrorFn;
 
@@ -173,7 +175,8 @@ public:
 	// Callback called on HTTP request complete
 	Http& on_complete(CompleteFn fn);
 	// Callback called on an error occuring at any stage of the requests: Url parsing, DNS lookup,
-	// TCP connection, HTTP transfer, and finally also when the response indicates an error (status >= 400).
+	// TCP connection, HTTP transfer, and finally also when the response indicates an error (status >= 400)
+	// or is a redirect that is not followed (3xx other than 304 with follow_redirects(false)).
 	// Therefore, a response body may or may not be present.
 	Http& on_error(ErrorFn fn);
 	// Callback called on data download/upload prorgess (called fairly frequently).

@@ -2387,7 +2387,7 @@ nlohmann::json download_model(const std::string &url, const std::string &filenam
     if (!done)
         return {{"error", "download_failed"}, {"detail", error}, {"http_status", status}};
     if (status != 200)
-        return {{"error", "download_failed"}, {"detail", "the library did not return the file (redirects are not followed)"},
+        return {{"error", "download_failed"}, {"detail", "the library did not return the file"},
                 {"http_status", status}};
 
     const fs::path target = dir / filename;
