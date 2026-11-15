@@ -374,7 +374,7 @@ private:
 
     double pattern_shift() const;
 
-    const Calib_Params &m_params;
+    const Calib_Params m_params;
 
     // Belt printers get belt kinematics installed on it (_refresh_writer);
     // shared_ptr keeps the class copyable — the writer is rebuilt by
