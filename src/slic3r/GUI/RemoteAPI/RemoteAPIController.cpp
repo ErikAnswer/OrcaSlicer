@@ -3927,12 +3927,16 @@ bool ends_with_3mf(const std::string &name)
 
 } // namespace
 
-// GET /api/v1/projects: the .3mf files in the API projects folder.
+// GET /api/v1/projects: the .3mf files in the API projects folder, created when missing so
+// POST /project/save can write there.
 Response Controller::handle_get_projects()
 {
     const boost::filesystem::path dir = projects_dir();
     nlohmann::json projects = nlohmann::json::array();
     boost::system::error_code ec;
+    boost::filesystem::create_directories(dir, ec);
+    if (ec)
+        return { 500, {{"error", "projects_folder"}, {"folder", into_u8(from_path(dir))}, {"detail", ec.message()}} };
     if (boost::filesystem::is_directory(dir, ec)) {
         for (boost::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             const boost::filesystem::path &p = it->path();
