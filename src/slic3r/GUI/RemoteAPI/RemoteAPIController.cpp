@@ -3857,7 +3857,11 @@ Response Controller::handle_calibration(const std::string &body)
         if (plater->is_background_process_slicing()) return refuse({{"error", "slicing"}});
         if (plater->is_loading_project()) return refuse({{"error", "busy"}});
         if (!plater->get_ui_job_worker().is_idle()) return refuse({{"error", "job_running"}});
-        const bool dirty = plater->is_project_dirty();
+        const auto *belt = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionBool>("belt_printer");
+        if (belt != nullptr && belt->value
+            && (params.mode == CalibMode::Calib_PA_Line || params.mode == CalibMode::Calib_PA_Pattern))
+            return refuse({{"error", "unsupported_on_belt"}, {"detail", "use pa_tower on a belt printer"}});
+        const bool dirty = project_has_unsaved_changes(plater);
         if (dirty && !discard_unsaved) return refuse({{"error", "unsaved_project"}});
         mcp_before_change();
         if (dirty) {
@@ -3880,6 +3884,7 @@ Response Controller::handle_calibration(const std::string &body)
         default: return {{"error", "unsupported_type"}};
         }
         sync_slice_state_to_current_plate("slice.plate_changed");
+        if (plater->model().objects.empty()) return refuse({{"error", "not_created"}});
         {
             const std::string title = plater->get_project_name().ToUTF8().data();
             McpRow row = mcp_row("file", MCP_T("New project"), title);
