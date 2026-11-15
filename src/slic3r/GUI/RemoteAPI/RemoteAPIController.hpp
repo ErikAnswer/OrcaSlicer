@@ -175,6 +175,8 @@ private:
     bool read_canvas_slots(bool use_cached, Slic3r::ElegooCanvas::Info &info, nlohmann::json &unsupported);
     Response handle_calibration(const std::string &body);   // POST /calibration
     Response handle_send_to_queue();                         // POST /print/queue
+    Response handle_get_projects();                          // GET /projects
+    Response handle_clear_plate(const std::string &body);    // POST /plate/clear
 
     // Mutate m_slice under the lock and broadcast a snapshot (event_name) to WS clients.
     void set_slice_state(const std::function<void(SliceState&)> &mut, const char *event_name);

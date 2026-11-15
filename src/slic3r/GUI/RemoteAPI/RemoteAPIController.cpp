@@ -53,7 +53,8 @@
 #include "slic3r/GUI/DeviceCore/DevExtruderSystem.h" // Bambu AMS: the tray feeding the nozzle, extruder count
 #include "slic3r/GUI/DeviceCore/DevMapping.h"       // Bambu AMS: DevMappingUtil::ams_filament_mapping
 #include "libslic3r/ProjectTask.hpp"                // Bambu AMS: FilamentInfo
-#include "slic3r/Utils/Http.hpp"              // POST /model {"url"}: fetch a mesh from the home library
+#include "slic3r/Utils/Http.hpp"
+#include <wx/stdpaths.h>                   // GET /projects: the Documents folder              // POST /model {"url"}: fetch a mesh from the home library
 
 #include <algorithm>
 #include <cmath>
@@ -3906,6 +3907,84 @@ Response Controller::handle_send_to_queue()
     return { 202, r };
 }
 
+namespace {
+
+const char *PROJECTS_FOLDER = "OrcaSlicer MCP";
+
+boost::filesystem::path projects_dir()
+{
+    return into_path(wxStandardPaths::Get().GetDocumentsDir()) / PROJECTS_FOLDER;
+}
+
+bool ends_with_3mf(const std::string &name)
+{
+    return name.size() >= 4 && to_lower_ascii(name.substr(name.size() - 4)) == ".3mf";
+}
+
+} // namespace
+
+// GET /api/v1/projects: the .3mf files in the API projects folder.
+Response Controller::handle_get_projects()
+{
+    const boost::filesystem::path dir = projects_dir();
+    nlohmann::json projects = nlohmann::json::array();
+    boost::system::error_code ec;
+    if (boost::filesystem::is_directory(dir, ec)) {
+        for (boost::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            const boost::filesystem::path &p = it->path();
+            const std::string file = into_u8(from_path(p.filename()));
+            boost::system::error_code entry_ec;
+            if (!boost::filesystem::is_regular_file(p, entry_ec) || !ends_with_3mf(file))
+                continue;
+            const uintmax_t   size     = boost::filesystem::file_size(p, entry_ec);
+            const std::time_t modified = entry_ec ? 0 : boost::filesystem::last_write_time(p, entry_ec);
+            if (entry_ec)
+                continue;
+            projects.push_back({{"name", file.substr(0, file.size() - 4)},
+                                {"size_bytes", (uint64_t) size},
+                                {"modified", (int64_t) modified}});
+        }
+    }
+    const std::string current = run_on_ui([]() -> nlohmann::json {
+        return wxGetApp().plater()->get_project_filename(".3mf").ToUTF8().data();
+    }).get<std::string>();
+    return { 200, {{"folder", into_u8(from_path(dir))}, {"projects", projects}, {"current", current}} };
+}
+
+// POST /api/v1/plate/clear {"all_plates"}: remove every object of the current plate, as the
+// plate's "Delete all" does, or of the whole project with all_plates.
+Response Controller::handle_clear_plate(const std::string &body)
+{
+    nlohmann::json in = body.empty() ? nlohmann::json::object() : nlohmann::json::parse(body);
+    if (!in.is_object())
+        return { 400, {{"error", "body_must_be_object"}} };
+    if (in.contains("all_plates") && !in["all_plates"].is_boolean())
+        return { 400, {{"error", "all_plates_must_be_boolean"}} };
+    const bool all_plates = in.value("all_plates", false);
+
+    nlohmann::json r = run_on_ui([this, all_plates]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        if (!plater->get_ui_job_worker().is_idle() || plater->is_background_process_slicing())
+            return {{"busy", true}};
+        const int    plate  = plater->get_partplate_list().get_curr_plate_index();
+        const size_t before = plater->model().objects.size();
+        mcp_before_change();
+        if (all_plates)
+            plater->delete_all_objects_from_model();
+        else
+            plater->remove_curr_plate_all();
+        const size_t after = plater->model().objects.size();
+        mcp_record(mcp_row("model", MCP_T("Removed"), std::to_string(before - after),
+                           std::string(), all_plates ? std::string() : mcp_plate_text(plate)));
+        sync_slice_state_to_current_plate("slice.plate_changed");
+        return {{"cleared", true}, {"all_plates", all_plates}, {"removed", before - after}, {"count", after}};
+    }, /*timeout_s=*/120);
+    if (r.value("busy", false))
+        return { 409, {{"error", "job_running"}} };
+    api_notify(all_plates ? "Removed every object" : "Cleared the current plate");
+    return { 200, r };
+}
+
 Response Controller::handle_arrange()
 {
     nlohmann::json r = run_on_ui([]() -> nlohmann::json {
@@ -6399,6 +6478,11 @@ Response Controller::dispatch_route(const Request &req)
             }
         }
         if (is("POST", "/api/v1/print/queue")) return handle_send_to_queue();
+        if (is("GET",  "/api/v1/projects"))     return handle_get_projects();
+        if (is("POST", "/api/v1/plate/clear")) {
+            try { return handle_clear_plate(req.body); }
+            catch (const nlohmann::json::exception &) { return { 400, {{"error", "invalid_json"}} }; }
+        }
         if (is("POST", "/api/v1/model")) {
             try {
                 return handle_load_model(req.body);

@@ -55,7 +55,7 @@ Base URL: `http://<host>:13130/api/v1`
 | GET | `/slice/status` | Current/last slice state + stats + warnings |
 | POST | `/slice/cancel` | Stop a running slice, or clear a stuck `slicing` state |
 | GET | `/gcode` | The G-code of the current plate's last slice (`409` until it is sliced) |
-| POST | `/model` | Load a model file (`{"path"}`; .stl, .obj, .3mf geometry, .step/.stp) onto the plate |
+| POST | `/model` | Load a model: `{"path": "<file on this machine>"}` or `{"url": "http://impresora3d.casa/api/download?root=out&path=<file>"}` (home library hosts only; the name comes from the last path segment or the `path` parameter; .stl/.obj/.step/.stp, no .3mf) |
 | GET | `/objects` | Objects on the bed: id, name, size, position, rotation, scale, bounding box, plate |
 | DELETE | `/objects/{id}` | Delete an object |
 | POST | `/objects/{id}/transform` | Move, rotate (degrees) or scale an object (`translate`, `rotate`, `scale`) |
@@ -93,9 +93,10 @@ Base URL: `http://<host>:13130/api/v1`
 | GET | `/activity` | The MCP panel's timeline of this project: the API's changes, what was undone, restore points |
 | POST | `/activity/note` | One row the connector adds to the MCP panel (`{"kind": "slice" \| "refused" \| "note", "text", "value"?, "detail"?}`) |
 | GET | `/user_changes?since=` | What the user changed outside the API since a journal seq (hand edits, preset switches, objects, plates, projects, panel undos) |
-| POST | `/model` | Load a model: `{"path": "<file on this machine>"}` or `{"url": "http://impresora3d.casa/api/download?root=out&path=<file>"}` (home library hosts only; the name comes from the last path segment or the `path` parameter; .stl/.obj/.step/.stp, no .3mf) |
 | POST | `/calibration` | Create a calibration test like the Calibration menu: `{"type": "pa_tower", "start": 0, "end": 0.08, "step": 0.002}`; flow_rate takes `{"pass": 1|2, "linear": bool}`. Replaces the project: unsaved work needs `"discard_unsaved": true` |
 | POST | `/print/queue` | Upload the sliced current plate through the printer preset's own Flashforge send (send dialog defaults and automatic slot mapping, no dialog). Only when that printer points at the home print queue |
+| GET | `/projects` | The .3mf files in Documents/OrcaSlicer MCP (`folder`, `projects` with name, size and modified time, `current`) |
+| POST | `/plate/clear` | Remove every object of the current plate (`{"all_plates": true}` for the whole project) |
 
 ### GET /status
 
