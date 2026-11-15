@@ -2271,6 +2271,11 @@ namespace {
 const char *PROJECTS_FOLDER = "OrcaSlicer MCP";
 constexpr size_t PROJECT_NAME_LIMIT = 100;
 const std::string PROJECT_SETTINGS_ENTRY = "Metadata/project_settings.config";
+constexpr mz_uint64 PROJECT_SETTINGS_LIMIT = 16 * 1024 * 1024;
+const std::set<std::string> WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+    "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"};
 
 boost::filesystem::path projects_dir()
 {
@@ -2294,6 +2299,8 @@ std::string project_stem(std::string name)
     for (unsigned char c : name)
         if (c < 0x20 || c == 0x7f || std::strchr("<>:\"/\\|?*", c) != nullptr)
             return {};
+    if (WINDOWS_RESERVED_NAMES.count(to_lower_ascii(name.substr(0, name.find('.')))) > 0)
+        return {};
     return name;
 }
 
@@ -2320,7 +2327,10 @@ std::string project_script_problem(const boost::filesystem::path &path)
         return "not_a_3mf";
     std::string problem;
     const int index = mz_zip_reader_locate_file(&zip, PROJECT_SETTINGS_ENTRY.c_str(), nullptr, 0);
-    if (index >= 0) {
+    mz_zip_archive_file_stat stat;
+    if (index >= 0 && (!mz_zip_reader_file_stat(&zip, (mz_uint) index, &stat) || stat.m_uncomp_size > PROJECT_SETTINGS_LIMIT)) {
+        problem = "unreadable_settings";
+    } else if (index >= 0) {
         size_t size = 0;
         void  *data = mz_zip_reader_extract_to_heap(&zip, (mz_uint) index, &size, 0);
         if (data == nullptr) {
@@ -2361,12 +2371,16 @@ Response Controller::handle_get_projects()
         for (boost::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             const boost::filesystem::path &p = it->path();
             const std::string file = into_u8(from_path(p.filename()));
-            if (!boost::filesystem::is_regular_file(p, ec) || !ends_with_3mf(file))
+            boost::system::error_code entry_ec;
+            if (!boost::filesystem::is_regular_file(p, entry_ec) || !ends_with_3mf(file))
                 continue;
-            const std::string stem = file.substr(0, file.size() - 4);
-            projects.push_back({{"name", stem},
-                                {"size_bytes", (uint64_t) boost::filesystem::file_size(p, ec)},
-                                {"modified", (int64_t) boost::filesystem::last_write_time(p, ec)}});
+            const uintmax_t   size     = boost::filesystem::file_size(p, entry_ec);
+            const std::time_t modified = entry_ec ? 0 : boost::filesystem::last_write_time(p, entry_ec);
+            if (entry_ec)
+                continue;
+            projects.push_back({{"name", file.substr(0, file.size() - 4)},
+                                {"size_bytes", (uint64_t) size},
+                                {"modified", (int64_t) modified}});
         }
     }
     const std::string current = run_on_ui([]() -> nlohmann::json {
@@ -2390,7 +2404,7 @@ Response Controller::handle_save_project(const std::string &body)
 
     nlohmann::json r = run_on_ui([path, stem, overwrite]() -> nlohmann::json {
         Plater *plater = wxGetApp().plater();
-        if (!plater->get_ui_job_worker().is_idle())
+        if (!plater->get_ui_job_worker().is_idle() || plater->is_background_process_slicing())
             return {{"busy", true}};
         if (plater->model().objects.empty())
             return {{"error", "empty"}};
@@ -2440,17 +2454,17 @@ Response Controller::handle_open_project(const std::string &body)
     boost::system::error_code ec;
     if (!boost::filesystem::is_regular_file(path, ec))
         return { 404, {{"error", "unknown_project"}, {"name", stem}} };
-    const std::string problem = project_script_problem(path);
-    if (problem == "post_process")
-        return { 403, {{"error", "post_process"}, {"detail", "the project runs a post-processing script; open it by hand in OrcaSlicer"}} };
-    if (!problem.empty())
-        return { 422, {{"error", problem}} };
     const bool discard_unsaved = in.value("discard_unsaved", false);
 
-    nlohmann::json r = run_on_ui([path, discard_unsaved]() -> nlohmann::json {
+    nlohmann::json r = run_on_ui([this, path, discard_unsaved]() -> nlohmann::json {
         Plater *plater = wxGetApp().plater();
         if (!plater->get_ui_job_worker().is_idle() || plater->is_background_process_slicing())
             return {{"busy", true}};
+        const std::string problem = project_script_problem(path);
+        if (problem == "post_process")
+            return {{"error", "post_process"}, {"detail", "the project runs a post-processing script; open it by hand in OrcaSlicer"}};
+        if (!problem.empty())
+            return {{"error", problem}};
         const nlohmann::json presets = dirty_presets();
         if (!presets.empty())
             return {{"error", "unsaved_presets"}, {"presets", presets},
@@ -2461,7 +2475,10 @@ Response Controller::handle_open_project(const std::string &body)
             plater->new_project(true, true);
         }
         plater->load_project(from_path(path), "<loadall>");
-        if (plater->get_project_filename(".3mf").IsEmpty())
+        boost::system::error_code ec;
+        const wxString opened = plater->get_project_filename(".3mf");
+        sync_slice_state_to_current_plate("slice.plate_changed");
+        if (opened.IsEmpty() || !boost::filesystem::equivalent(into_path(opened), path, ec))
             return {{"error", "open_failed"}, {"detail", "OrcaSlicer did not load the project; see its window"}};
         nlohmann::json objects = nlohmann::json::array();
         for (const ModelObject *mo : plater->model().objects)
@@ -2471,8 +2488,10 @@ Response Controller::handle_open_project(const std::string &body)
     }, /*timeout_s=*/120);
     if (r.value("busy", false))
         return { 409, {{"error", "job_running"}} };
-    if (r.contains("error"))
-        return { r["error"] == "open_failed" ? 422 : 409, r };
+    if (r.contains("error")) {
+        const std::string e = r["error"].get<std::string>();
+        return { e == "post_process" ? 403 : e == "open_failed" || e == "not_a_3mf" || e == "unreadable_settings" ? 422 : 409, r };
+    }
     api_notify("Opened the project '" + stem + "'");
     return { 200, r };
 }
@@ -2486,7 +2505,7 @@ Response Controller::handle_clear_plate(const std::string &body)
         return { 400, {{"error", "body_must_be_object"}} };
     const bool all_plates = in.value("all_plates", false);
 
-    nlohmann::json r = run_on_ui([all_plates]() -> nlohmann::json {
+    nlohmann::json r = run_on_ui([this, all_plates]() -> nlohmann::json {
         Plater *plater = wxGetApp().plater();
         if (!plater->get_ui_job_worker().is_idle() || plater->is_background_process_slicing())
             return {{"busy", true}};
@@ -2496,6 +2515,7 @@ Response Controller::handle_clear_plate(const std::string &body)
         else
             plater->remove_curr_plate_all();
         const size_t after = plater->model().objects.size();
+        sync_slice_state_to_current_plate("slice.plate_changed");
         return {{"cleared", true}, {"all_plates", all_plates}, {"removed", before - after}, {"count", after}};
     });
     if (r.value("busy", false))
