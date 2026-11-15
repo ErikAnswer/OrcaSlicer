@@ -26,6 +26,7 @@
 #include <miniz.h>                        // plate_render: RGBA -> PNG in memory
 #include "libslic3r/FlushVolCalc.hpp"      // project scope: g_max_flush_volume bound
 #include "slic3r/GUI/WipeTowerDialog.hpp"  // project scope: is_flush_config_modified
+#include "libslic3r/miniz_extension.hpp"   // projects: read the settings of a .3mf before opening it
 #include "slic3r/Utils/Http.hpp"              // POST /model {"url"}: fetch a mesh from the home library
 
 #include <algorithm>
@@ -33,6 +34,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cstring>
 #include <deque>
 #include <fstream>
 #include <future>
@@ -43,6 +45,7 @@
 #include <vector>
 
 #include <boost/filesystem.hpp>
+#include <wx/stdpaths.h>
 #include <boost/nowide/fstream.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -2260,6 +2263,247 @@ Response Controller::handle_send_to_queue()
     return { 202, r };
 }
 
+// --- projects ----------------------------------------------------------------
+// Projects are saved and opened by name inside one folder of the user's Documents, never by
+// path, and a .3mf whose settings carry a post_process script is refused before it is loaded.
+namespace {
+
+const char *PROJECTS_FOLDER = "OrcaSlicer MCP";
+constexpr size_t PROJECT_NAME_LIMIT = 100;
+const std::string PROJECT_SETTINGS_ENTRY = "Metadata/project_settings.config";
+
+boost::filesystem::path projects_dir()
+{
+    return into_path(wxStandardPaths::Get().GetDocumentsDir()) / PROJECTS_FOLDER;
+}
+
+bool ends_with_3mf(const std::string &name)
+{
+    return name.size() >= 4 && to_lower_ascii(name.substr(name.size() - 4)) == ".3mf";
+}
+
+// The bare project name (no folder, no ".3mf"), or empty when it is not a safe file name.
+std::string project_stem(std::string name)
+{
+    if (ends_with_3mf(name))
+        name.resize(name.size() - 4);
+    if (name.empty() || name.size() > PROJECT_NAME_LIMIT)
+        return {};
+    if (name.front() == ' ' || name.back() == ' ' || name.front() == '.' || name.back() == '.')
+        return {};
+    for (unsigned char c : name)
+        if (c < 0x20 || c == 0x7f || std::strchr("<>:\"/\\|?*", c) != nullptr)
+            return {};
+    return name;
+}
+
+boost::filesystem::path project_path(const std::string &stem)
+{
+    return projects_dir() / into_path(from_u8(stem + ".3mf"));
+}
+
+bool has_script(const nlohmann::json &value)
+{
+    if (value.is_string())
+        return value.get<std::string>().find_first_not_of(" \t\r\n") != std::string::npos;
+    if (value.is_array())
+        return std::any_of(value.begin(), value.end(), [](const nlohmann::json &v) { return has_script(v); });
+    return false;
+}
+
+// Empty when the project's own settings have no post_process script, else the refusal reason.
+std::string project_script_problem(const boost::filesystem::path &path)
+{
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    if (!open_zip_reader(&zip, into_u8(from_path(path))))
+        return "not_a_3mf";
+    std::string problem;
+    const int index = mz_zip_reader_locate_file(&zip, PROJECT_SETTINGS_ENTRY.c_str(), nullptr, 0);
+    if (index >= 0) {
+        size_t size = 0;
+        void  *data = mz_zip_reader_extract_to_heap(&zip, (mz_uint) index, &size, 0);
+        if (data == nullptr) {
+            problem = "unreadable_settings";
+        } else {
+            const nlohmann::json settings = nlohmann::json::parse(static_cast<const char *>(data),
+                                                                  static_cast<const char *>(data) + size, nullptr, false);
+            mz_free(data);
+            if (settings.is_discarded() || !settings.is_object())
+                problem = "unreadable_settings";
+            else if (settings.contains("post_process") && has_script(settings["post_process"]))
+                problem = "post_process";
+        }
+    }
+    close_zip_reader(&zip);
+    return problem;
+}
+
+nlohmann::json dirty_presets()
+{
+    PresetBundle  *bundle = wxGetApp().preset_bundle;
+    nlohmann::json dirty  = nlohmann::json::array();
+    if (bundle->prints.current_is_dirty()) dirty.push_back("print");
+    if (bundle->filaments.current_is_dirty()) dirty.push_back("filament");
+    if (bundle->printers.current_is_dirty()) dirty.push_back("printer");
+    return dirty;
+}
+
+} // namespace
+
+// GET /api/v1/projects: the .3mf files in the API projects folder.
+Response Controller::handle_get_projects()
+{
+    const boost::filesystem::path dir = projects_dir();
+    nlohmann::json projects = nlohmann::json::array();
+    boost::system::error_code ec;
+    if (boost::filesystem::is_directory(dir, ec)) {
+        for (boost::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            const boost::filesystem::path &p = it->path();
+            const std::string file = into_u8(from_path(p.filename()));
+            if (!boost::filesystem::is_regular_file(p, ec) || !ends_with_3mf(file))
+                continue;
+            const std::string stem = file.substr(0, file.size() - 4);
+            projects.push_back({{"name", stem},
+                                {"size_bytes", (uint64_t) boost::filesystem::file_size(p, ec)},
+                                {"modified", (int64_t) boost::filesystem::last_write_time(p, ec)}});
+        }
+    }
+    const std::string current = run_on_ui([]() -> nlohmann::json {
+        return wxGetApp().plater()->get_project_filename(".3mf").ToUTF8().data();
+    }).get<std::string>();
+    return { 200, {{"folder", into_u8(from_path(dir))}, {"projects", projects}, {"current", current}} };
+}
+
+// POST /api/v1/project/save {"name", "overwrite"}: save the whole project as <name>.3mf in the
+// projects folder, the way File > Save project as does, and make it the open project.
+Response Controller::handle_save_project(const std::string &body)
+{
+    nlohmann::json in = nlohmann::json::parse(body);
+    if (!in.is_object() || !in.contains("name") || !in["name"].is_string())
+        return { 400, {{"error", "missing_name"}} };
+    const std::string stem = project_stem(in["name"].get<std::string>());
+    if (stem.empty())
+        return { 422, {{"error", "invalid_name"}, {"detail", "a plain file name: no folders, no <>:\"/\\|?* and at most 100 characters"}} };
+    const bool overwrite = in.value("overwrite", false);
+    const boost::filesystem::path path = project_path(stem);
+
+    nlohmann::json r = run_on_ui([path, stem, overwrite]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        if (!plater->get_ui_job_worker().is_idle())
+            return {{"busy", true}};
+        if (plater->model().objects.empty())
+            return {{"error", "empty"}};
+        boost::system::error_code ec;
+        if (boost::filesystem::exists(path, ec) && !overwrite)
+            return {{"error", "exists"}, {"detail", "pass overwrite to replace it"}};
+        boost::filesystem::create_directories(path.parent_path(), ec);
+        if (ec)
+            return {{"error", "save_failed"}, {"detail", ec.message()}};
+        auto strategy = SaveStrategy::SplitModel | SaveStrategy::ShareMesh;
+        if (wxGetApp().app_config->get_bool("export_sources_full_pathnames"))
+            strategy = strategy | SaveStrategy::FullPathSources;
+        if (plater->export_3mf(path, strategy) < 0)
+            return {{"error", "save_failed"}, {"detail", "OrcaSlicer could not write the file"}};
+        Slic3r::remove_backup(plater->model(), false);
+        plater->set_project_filename(from_path(path));
+        plater->up_to_date(true, false);
+        plater->up_to_date(true, true);
+        wxGetApp().update_saved_preset_from_current_preset();
+        plater->reset_project_dirty_after_save();
+        plater->update_title_dirty_status();
+        return {{"saved", true}, {"name", stem}, {"path", into_u8(from_path(path))},
+                {"size_bytes", (uint64_t) boost::filesystem::file_size(path, ec)}};
+    }, /*timeout_s=*/120);
+    if (r.value("busy", false))
+        return { 409, {{"error", "job_running"}} };
+    if (r.contains("error")) {
+        const std::string e = r["error"].get<std::string>();
+        return { e == "exists" ? 409 : e == "save_failed" ? 500 : 422, r };
+    }
+    api_notify("Saved the project as '" + stem + "'");
+    return { 200, r };
+}
+
+// POST /api/v1/project/open {"name", "discard_unsaved"}: open <name>.3mf from the projects
+// folder as File > Open project does. Unsaved project changes are refused unless
+// discard_unsaved; unsaved preset edits always are (Orca would ask in a modal dialog).
+Response Controller::handle_open_project(const std::string &body)
+{
+    nlohmann::json in = nlohmann::json::parse(body);
+    if (!in.is_object() || !in.contains("name") || !in["name"].is_string())
+        return { 400, {{"error", "missing_name"}} };
+    const std::string stem = project_stem(in["name"].get<std::string>());
+    if (stem.empty())
+        return { 422, {{"error", "invalid_name"}} };
+    const boost::filesystem::path path = project_path(stem);
+    boost::system::error_code ec;
+    if (!boost::filesystem::is_regular_file(path, ec))
+        return { 404, {{"error", "unknown_project"}, {"name", stem}} };
+    const std::string problem = project_script_problem(path);
+    if (problem == "post_process")
+        return { 403, {{"error", "post_process"}, {"detail", "the project runs a post-processing script; open it by hand in OrcaSlicer"}} };
+    if (!problem.empty())
+        return { 422, {{"error", problem}} };
+    const bool discard_unsaved = in.value("discard_unsaved", false);
+
+    nlohmann::json r = run_on_ui([path, discard_unsaved]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        if (!plater->get_ui_job_worker().is_idle() || plater->is_background_process_slicing())
+            return {{"busy", true}};
+        const nlohmann::json presets = dirty_presets();
+        if (!presets.empty())
+            return {{"error", "unsaved_presets"}, {"presets", presets},
+                    {"detail", "save or discard the preset edits in OrcaSlicer first"}};
+        if (plater->is_project_dirty()) {
+            if (!discard_unsaved)
+                return {{"error", "unsaved_project"}};
+            plater->new_project(true, true);
+        }
+        plater->load_project(from_path(path), "<loadall>");
+        if (plater->get_project_filename(".3mf").IsEmpty())
+            return {{"error", "open_failed"}, {"detail", "OrcaSlicer did not load the project; see its window"}};
+        nlohmann::json objects = nlohmann::json::array();
+        for (const ModelObject *mo : plater->model().objects)
+            objects.push_back({{"id", (uint64_t) mo->id().id}, {"name", mo->name}});
+        return {{"opened", true}, {"project", plater->get_project_filename(".3mf").ToUTF8().data()},
+                {"plates", plater->get_partplate_list().get_plate_count()}, {"objects", objects}};
+    }, /*timeout_s=*/120);
+    if (r.value("busy", false))
+        return { 409, {{"error", "job_running"}} };
+    if (r.contains("error"))
+        return { r["error"] == "open_failed" ? 422 : 409, r };
+    api_notify("Opened the project '" + stem + "'");
+    return { 200, r };
+}
+
+// POST /api/v1/plate/clear {"all_plates"}: remove every object of the current plate, as the
+// plate's "Delete all" does, or of the whole project with all_plates.
+Response Controller::handle_clear_plate(const std::string &body)
+{
+    nlohmann::json in = body.empty() ? nlohmann::json::object() : nlohmann::json::parse(body);
+    if (!in.is_object())
+        return { 400, {{"error", "body_must_be_object"}} };
+    const bool all_plates = in.value("all_plates", false);
+
+    nlohmann::json r = run_on_ui([all_plates]() -> nlohmann::json {
+        Plater *plater = wxGetApp().plater();
+        if (!plater->get_ui_job_worker().is_idle() || plater->is_background_process_slicing())
+            return {{"busy", true}};
+        const size_t before = plater->model().objects.size();
+        if (all_plates)
+            plater->delete_all_objects_from_model();
+        else
+            plater->remove_curr_plate_all();
+        const size_t after = plater->model().objects.size();
+        return {{"cleared", true}, {"all_plates", all_plates}, {"removed", before - after}, {"count", after}};
+    });
+    if (r.value("busy", false))
+        return { 409, {{"error", "job_running"}} };
+    api_notify(all_plates ? "Removed every object" : "Cleared the current plate");
+    return { 200, r };
+}
+
 Response Controller::handle_arrange()
 {
     nlohmann::json r = run_on_ui([]() -> nlohmann::json {
@@ -2582,6 +2826,19 @@ Response Controller::dispatch(const Request &req)
             }
         }
         if (is("POST", "/api/v1/print/queue")) return handle_send_to_queue();
+        if (is("GET",  "/api/v1/projects"))     return handle_get_projects();
+        if (is("POST", "/api/v1/project/save")) {
+            try { return handle_save_project(req.body); }
+            catch (const nlohmann::json::exception &) { return { 400, {{"error", "invalid_json"}} }; }
+        }
+        if (is("POST", "/api/v1/project/open")) {
+            try { return handle_open_project(req.body); }
+            catch (const nlohmann::json::exception &) { return { 400, {{"error", "invalid_json"}} }; }
+        }
+        if (is("POST", "/api/v1/plate/clear")) {
+            try { return handle_clear_plate(req.body); }
+            catch (const nlohmann::json::exception &) { return { 400, {{"error", "invalid_json"}} }; }
+        }
         if (is("POST", "/api/v1/model")) {
             try {
                 return handle_load_model(req.body);
