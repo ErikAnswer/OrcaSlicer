@@ -2379,11 +2379,15 @@ nlohmann::json download_model(const std::string &url, const std::string &filenam
         .timeout_connect(10)
         .timeout_max(300)
         .size_limit(MODEL_DOWNLOAD_LIMIT)
+        .follow_redirects(false)
         .on_complete([&](std::string b, unsigned s) { body = std::move(b); status = s; done = true; })
         .on_error([&](std::string, std::string e, unsigned s) { error = std::move(e); status = s; })
         .perform_sync();
     if (!done)
         return {{"error", "download_failed"}, {"detail", error}, {"http_status", status}};
+    if (status != 200)
+        return {{"error", "download_failed"}, {"detail", "the library did not return the file (redirects are not followed)"},
+                {"http_status", status}};
 
     const fs::path target = dir / filename;
     boost::nowide::ofstream out(target.string(), std::ios::binary);
@@ -3968,20 +3972,24 @@ Response Controller::handle_clear_plate(const std::string &body)
             return {{"busy", true}};
         const int    plate  = plater->get_partplate_list().get_curr_plate_index();
         const size_t before = plater->model().objects.size();
+        if (before == 0)
+            return {{"cleared", true}, {"all_plates", all_plates}, {"removed", 0}, {"count", 0}};
         mcp_before_change();
         if (all_plates)
             plater->delete_all_objects_from_model();
         else
             plater->remove_curr_plate_all();
         const size_t after = plater->model().objects.size();
-        mcp_record(mcp_row("model", MCP_T("Removed"), std::to_string(before - after),
-                           std::string(), all_plates ? std::string() : mcp_plate_text(plate)));
+        if (after < before)
+            mcp_record(mcp_row("model", MCP_T("Removed"), std::to_string(before - after),
+                               std::string(), all_plates ? std::string() : mcp_plate_text(plate)));
         sync_slice_state_to_current_plate("slice.plate_changed");
         return {{"cleared", true}, {"all_plates", all_plates}, {"removed", before - after}, {"count", after}};
     }, /*timeout_s=*/120);
     if (r.value("busy", false))
         return { 409, {{"error", "job_running"}} };
-    api_notify(all_plates ? "Removed every object" : "Cleared the current plate");
+    if (r.value("removed", 0) > 0)
+        api_notify(all_plates ? "Removed every object" : "Cleared the current plate");
     return { 200, r };
 }
 

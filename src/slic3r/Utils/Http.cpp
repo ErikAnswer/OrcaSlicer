@@ -143,6 +143,7 @@ struct Http::priv
     std::string headers;
 	size_t limit;
 	std::atomic_bool cancel;
+	bool follow_location;
     std::unique_ptr<form_file> putFile;
 
 	std::thread io_thread;
@@ -198,6 +199,7 @@ Http::priv::priv(const std::string &url)
 	, error_buffer(CURL_ERROR_SIZE + 1, '\0')
 	, limit(0)
 	, cancel(false)
+	, follow_location(true)
 {
     Http::tls_global_init();
 
@@ -447,7 +449,7 @@ std::string Http::priv::body_size_error()
 
 void Http::priv::http_perform()
 {
-	::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+	::curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, follow_location ? 1L : 0L);
 	::curl_easy_setopt(curl, CURLOPT_POSTREDIR, CURL_REDIR_POST_ALL);
 	::curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writecb);
 	::curl_easy_setopt(curl, CURLOPT_WRITEDATA, static_cast<void*>(this));
@@ -577,6 +579,12 @@ Http& Http::timeout_max(long timeout)
 Http& Http::size_limit(size_t sizeLimit)
 {
 	if (p) { p->limit = sizeLimit; }
+	return *this;
+}
+
+Http& Http::follow_redirects(bool follow)
+{
+	if (p) { p->follow_location = follow; }
 	return *this;
 }
 

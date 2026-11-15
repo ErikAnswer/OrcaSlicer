@@ -21573,7 +21573,8 @@ bool Plater::remote_api_send_to_flashforge(std::string &error, std::map<std::str
 
     auto dialog = std::make_unique<FlashforgePrintHostSendDialog>(default_output_file, upload_job.printhost->get_post_upload_actions(), groups,
                                                                   storage_paths, storage_names, false, flashforge_host,
-                                                                  supports_material_station, std::move(slots), project_filaments);
+                                                                  supports_material_station, std::move(slots), project_filaments,
+                                                                  wxGetApp().preset_bundle->full_config().opt_bool("manual_filament_change"));
     dialog->init();
     upload_info = dialog->extendedInfo();
     if (upload_info["useMatlStation"] == "1" && std::stoul(upload_info["gcodeToolCnt"]) < project_filaments.size()) {
