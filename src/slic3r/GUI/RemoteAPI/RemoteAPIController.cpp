@@ -3869,6 +3869,7 @@ Response Controller::handle_calibration(const std::string &body)
         if (dirty && !discard_unsaved) return refuse({{"error", "unsaved_project"}});
         const wxString project_file_before = plater->get_project_filename(".3mf");
         const wxString project_name_before = plater->get_project_name();
+        const bool     had_objects         = !plater->model().objects.empty();
         mcp_before_change();
         if (dirty) {
             plater->model().set_backup_path("");
@@ -3887,7 +3888,7 @@ Response Controller::handle_calibration(const std::string &body)
         }
         sync_slice_state_to_current_plate("slice.plate_changed");
         if (plater->model().objects.empty()) {
-            const bool replaced = dirty || plater->get_project_filename(".3mf") != project_file_before
+            const bool replaced = dirty || had_objects || plater->get_project_filename(".3mf") != project_file_before
                                   || plater->get_project_name() != project_name_before;
             return refuse({{"error", "not_created"},
                            {"project_replaced", replaced},
