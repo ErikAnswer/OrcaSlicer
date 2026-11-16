@@ -70,7 +70,7 @@ Base URL: `http://<host>:13130/api/v1`
 | GET | `/presets` | Preset names per type, with system and selected flags |
 | PUT | `/preset` | Select a preset (`{"type":"print\|filament\|printer","name"}`) |
 | POST | `/preset/save` | Save the current settings as a user preset (`{"type","name"}`), no dialog; `slot` saves one filament slot's preset and moves only that slot; a filament save past the temperature safety check needs `allow_temperature_pairs` |
-| POST | `/preset/config` | The full config of a named preset (`{"type","name"}`; credentials redacted) |
+| POST | `/preset/config` | The full config of a named preset as saved, without the unsaved edits of the selected one (`{"type","name"}`; credentials redacted) |
 | DELETE | `/preset` | Delete a user preset (never a system, selected or inherited-from one) |
 | GET | `/printer/slots` | The printer's filament trays: an Elegoo Centauri Carbon 2's CANVAS (read now), or the selected Bambu Lab printer's AMS and external spool |
 | GET | `/printer/slot_mapping` | Which tray each filament of the plate will print from (on Bambu: the Send dialog's automatic choice) |

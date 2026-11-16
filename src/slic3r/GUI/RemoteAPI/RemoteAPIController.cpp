@@ -3101,7 +3101,9 @@ Response Controller::handle_get_preset_config(const std::string &body)
     nlohmann::json r = run_on_ui([type_s, name]() -> nlohmann::json {
         PresetCollection *presets = api_preset_collection(type_s);
         if (presets == nullptr) return {{"error", "unknown_type"}};
-        const Preset *p = presets->find_preset(name, false);
+        // real = true: the preset as saved. Without it the selected preset comes back as its edited copy, and a
+        // caller putting a key back to its saved value (the MCP's null) would write the unsaved edit again.
+        const Preset *p = presets->find_preset(name, false, true);
         if (p == nullptr) return {{"error", "unknown_preset"}};
         nlohmann::json cfg = nlohmann::json::object();
         for (const std::string &k : p->config.keys()) {
