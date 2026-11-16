@@ -3805,6 +3805,8 @@ const std::map<std::string, CalibMode> CALIBRATION_TYPES = {
 // Calibration menu; they replace the project, so unsaved work is refused unless
 // "discard_unsaved" is true (otherwise their own "save changes?" dialog would block).
 // Like POST /project/new it leaves a restore point and a "New project" row in the MCP panel.
+// A generator that adds no objects answers 500 not_created, with "project_replaced" telling
+// whether the previous project is already gone.
 Response Controller::handle_calibration(const std::string &body)
 {
     nlohmann::json in = nlohmann::json::parse(body);
@@ -3865,6 +3867,8 @@ Response Controller::handle_calibration(const std::string &body)
             return refuse({{"error", "unsupported_on_belt"}, {"detail", "use pa_tower on a belt printer"}});
         const bool dirty = project_has_unsaved_changes(plater);
         if (dirty && !discard_unsaved) return refuse({{"error", "unsaved_project"}});
+        const wxString project_file_before = plater->get_project_filename(".3mf");
+        const wxString project_name_before = plater->get_project_name();
         mcp_before_change();
         if (dirty) {
             plater->model().set_backup_path("");
@@ -3882,7 +3886,14 @@ Response Controller::handle_calibration(const std::string &body)
         default: return {{"error", "unsupported_type"}};
         }
         sync_slice_state_to_current_plate("slice.plate_changed");
-        if (plater->model().objects.empty()) return refuse({{"error", "not_created"}});
+        if (plater->model().objects.empty()) {
+            const bool replaced = dirty || plater->get_project_filename(".3mf") != project_file_before
+                                  || plater->get_project_name() != project_name_before;
+            return refuse({{"error", "not_created"},
+                           {"project_replaced", replaced},
+                           {"detail", replaced ? "the calibration test created no objects and the previous project was already replaced; the MCP panel has a restore point"
+                                               : "the calibration test created no objects"}});
+        }
         {
             const std::string title = plater->get_project_name().ToUTF8().data();
             McpRow row = mcp_row("file", MCP_T("New project"), title);
@@ -3896,6 +3907,11 @@ Response Controller::handle_calibration(const std::string &body)
     }, /*timeout_s=*/120);
     if (r.contains("error")) {
         const std::string e = r["error"].get<std::string>();
+        if (e == "not_created") {
+            api_notify(r.value("project_replaced", false) ? "Couldn't create the calibration test; the previous project was already replaced"
+                                                          : "Couldn't create the calibration test", true);
+            return { 500, r };
+        }
         const bool conflict = e == "unsaved_project" || e == "slicing" || e == "busy" || e == "job_running";
         return { conflict ? 409 : 422, r };
     }

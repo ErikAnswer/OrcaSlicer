@@ -93,7 +93,7 @@ Base URL: `http://<host>:13130/api/v1`
 | GET | `/activity` | The MCP panel's timeline of this project: the API's changes, what was undone, restore points |
 | POST | `/activity/note` | One row the connector adds to the MCP panel (`{"kind": "slice" \| "refused" \| "note", "text", "value"?, "detail"?}`) |
 | GET | `/user_changes?since=` | What the user changed outside the API since a journal seq (hand edits, preset switches, objects, plates, projects, panel undos) |
-| POST | `/calibration` | Create a calibration test like the Calibration menu: `{"type": "pa_tower", "start": 0, "end": 0.08, "step": 0.002}`; flow_rate takes `{"pass": 1|2, "linear": bool}`. Replaces the project: unsaved work needs `"discard_unsaved": true`; 409 while slicing, loading a project or running a job. Leaves an MCP panel restore point and a "New project" row, like `/project/new` |
+| POST | `/calibration` | Create a calibration test like the Calibration menu: `{"type": "pa_tower", "start": 0, "end": 0.08, "step": 0.002}`; flow_rate takes `{"pass": 1|2, "linear": bool}`. Replaces the project: unsaved work needs `"discard_unsaved": true`; 409 while slicing, loading a project or running a job. Leaves an MCP panel restore point and a "New project" row, like `/project/new`. Errors under [POST /calibration](#post-calibration) |
 | POST | `/print/queue` | Upload the sliced current plate through the printer preset's own Flashforge send (send dialog defaults and automatic slot mapping, no dialog). Only when that printer points at the home print queue |
 | GET | `/projects` | The .3mf files in Documents/OrcaSlicer MCP (`folder`, `projects` with name, size and modified time, `current`) |
 | POST | `/plate/clear` | Remove every object of the current plate (`{"all_plates": true}` for the whole project) |
@@ -690,6 +690,31 @@ second prompt, keep the modified presets for the new project or discard them, is
 answered with Keep: unsaved preset edits carry over and `kept_changes` names the
 groups. Use `PUT /preset` to drop them. An optional `name` gives the project its
 title (the window shows it; the file name is chosen at save). Errors as for open.
+
+### POST /calibration
+
+```json
+{ "created": true, "objects": [ { "id": 123, "name": "pa_tower" } ] }
+```
+The same generators as the Calibration menu. Range types (`pa_line`, `pa_pattern`,
+`pa_tower`, `max_volumetric_speed`, `retraction`, `vfa`) take `start`, `end` and `step`;
+`temp_tower` takes `start` and `end` and prints from `start` down to `end` in 5 degree
+blocks; `flow_rate` takes `pass` (1 or 2) and `linear`. The test replaces the project, so
+unsaved work is refused unless `"discard_unsaved": true`.
+
+| Status | `error` | Meaning |
+|---|---|---|
+| 400 | `missing_type`, `missing_range` | No `type`, or a range type without its numbers |
+| 409 | `slicing`, `busy`, `job_running` | A slice is running, a project is loading or a background job (arrange, orient) has not finished. Nothing changed; try again later |
+| 409 | `unsaved_project` | The project has unsaved changes and `discard_unsaved` is not true. Nothing changed |
+| 422 | `unsupported_type` | Unknown `type`; `supported` lists the valid ones |
+| 422 | `invalid_pass`, `invalid_range` | `pass` is not 1 or 2, or the range is not one the test can print (`detail` says why) |
+| 422 | `unsupported_on_belt` | `pa_line` and `pa_pattern` do not exist for a belt printer; use `pa_tower`. Nothing changed |
+| 500 | `not_created` | The generator added no objects. `project_replaced` tells whether the previous project is already gone (the MCP panel keeps its restore point); `detail` says the same in words |
+
+Every refusal decided in the window (409, `unsupported_on_belt`, `not_created`) leaves a
+refused "New project" row in the MCP panel. Only `not_created` can come after the project
+was replaced, and it also raises a warning notification in the window.
 
 ### GET /project/recent
 
