@@ -613,7 +613,7 @@ void Controller::notify_project_opened()
     mcp_journal_project_opened();
     if (g_controller == nullptr) return;
     // On the GUI thread at the end of Plater::load_project.
-    std::string name = wxGetApp().plater()->get_project_filename().ToUTF8().data();
+    std::string name = wxGetApp().plater()->get_project_filename(".3mf").ToUTF8().data();
     wxGetApp().remote_api_server().broadcast({{"event", "project.opened"}, {"project", name}});
 }
 
@@ -773,7 +773,7 @@ Response Controller::handle_status()
             {"capabilities", {"status", "config", "slice", "events", "model", "preset", "gcode", "objects", "arrange", "orient", "object_config", "slice_breakdown", "plate_render", "sensitive_key_policy", "plates", "printer_slots", "project", "preset_slot", "activity", "filament_slots", "bambu_ams", "preset_temperature_check"}},
             {"sensitive_keys_allowed", sensitive_writes_allowed()},
             {"project_file_changes_allowed", project_file_changes_allowed()},
-            {"project", plater->get_project_filename().ToUTF8().data()},
+            {"project", plater->get_project_filename(".3mf").ToUTF8().data()},
             // project: the window title's name, and whether File > Save has something to
             // write (plater edits, modified presets, or undo-stack changes since the save).
             {"project_name", std::string(plater->get_project_name().ToUTF8().data())},
