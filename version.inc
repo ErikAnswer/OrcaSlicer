@@ -7,7 +7,7 @@ set(SLIC3R_APP_KEY "OrcaSlicer")
 if(NOT DEFINED BBL_INTERNAL_TESTING)
 set(BBL_INTERNAL_TESTING "0")
 endif()
-set(SoftFever_VERSION "2.5.0")
+set(SoftFever_VERSION "2.5.1")
 
 # orca-mcp: monotonically increasing fork release ordinal (the N in v<base>-mcp.N
 # release tags on MaxEllis/OrcaSlicer). The in-app update check compares this
