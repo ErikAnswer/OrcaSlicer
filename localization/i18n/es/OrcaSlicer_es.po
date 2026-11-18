@@ -17322,6 +17322,23 @@ msgstr "Área de alisado para la capa de interfaz de la torre de purga (donde se
 msgid "mm²"
 msgstr "mm²"
 
+msgid "Prime tower speed factor curve"
+msgstr "Curva de velocidad de la torre de purga"
+
+msgid ""
+"Speed ramp of the purge lines on the prime tower after a tool change, as comma-separated "
+"multipliers of the tower purge speed, one per line. For example \"0.33,0.375,0.458,0.875\" "
+"prints the 1st line at 33%, the 2nd at 37.5% and so on; the last value is reused for the "
+"remaining lines. Each value is clamped to 0.01 ~ 5.0 and the filament's maximum volumetric "
+"speed still applies. Leave empty to keep the built-in ramp. Only used by the Type 2 wipe tower."
+msgstr ""
+"Rampa de velocidad de las líneas de purga en la torre tras un cambio de herramienta, como "
+"multiplicadores de la velocidad de purga de la torre separados por comas, uno por línea. Por "
+"ejemplo, \"0.33,0.375,0.458,0.875\" imprime la 1.ª línea al 33 %, la 2.ª al 37,5 % y así "
+"sucesivamente; el último valor se repite en las líneas restantes. Cada valor se limita a 0,01 ~ "
+"5,0 y se sigue respetando la velocidad volumétrica máxima del filamento. Déjalo vacío para usar "
+"la rampa integrada. Solo lo usa la torre de purga de tipo 2."
+
 msgid "Interface layer purge length"
 msgstr "Longitud de purga de la capa de interfaz"
 

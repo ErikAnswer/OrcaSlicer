@@ -29,6 +29,7 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/GCode/ToolOrdering.hpp"
 #include "libslic3r/GCode/WipeTower.hpp"
+#include "libslic3r/GCode/WipeTower2.hpp"
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -1073,4 +1074,83 @@ TEST_CASE("Smooth timelapse prints each tower layer's wall once when a layer joi
     Print print;
     slice_precise_z_pair(config, "type1", 10.004, print);
     CHECK(count_joined_layers(print) > 0);
+}
+
+TEST_CASE("The prime tower speed factor curve parses comma-separated factors", "[WipeTower]")
+{
+    CHECK(WipeTower2::parse_speed_factor_curve("").empty());
+    CHECK(WipeTower2::parse_speed_factor_curve("0.5, 1,2") == std::vector<float>{ 0.5f, 1.f, 2.f });
+    CHECK(WipeTower2::parse_speed_factor_curve("0,9") == std::vector<float>{ 0.01f, 5.f });
+    CHECK(WipeTower2::parse_speed_factor_curve("0.5,abc").empty());
+    CHECK(WipeTower2::parse_speed_factor_curve("0.5;1").empty());
+    CHECK(WipeTower2::parse_speed_factor_curve(" ").empty());
+}
+
+TEST_CASE("Without a speed factor curve the purge keeps the built-in ramp", "[WipeTower]")
+{
+    const float target = 6000.f;
+    std::vector<float> speeds;
+    float speed = 0.f;
+    for (int line = 0; line < 7; ++line)
+        speeds.push_back(speed = WipeTower2::purge_line_speed({}, line, speed, target));
+    const std::vector<float> ramp{ 0.33f * target, 0.375f * target, 0.458f * target, 0.875f * target,
+                                   0.875f * target + 50.f, 0.875f * target + 100.f, 0.875f * target + 150.f };
+    CHECK(speeds == ramp);
+    CHECK(WipeTower2::purge_line_speed({}, 4, target, target) == target);
+}
+
+TEST_CASE("A speed factor curve sets each purge line's speed and repeats its last factor", "[WipeTower]")
+{
+    const std::vector<float> curve{ 0.2f, 0.6f, 1.5f };
+    CHECK_THAT(WipeTower2::purge_line_speed(curve, 0, 0.f, 1000.f), Catch::Matchers::WithinAbs(200., 1e-3));
+    CHECK_THAT(WipeTower2::purge_line_speed(curve, 1, 200.f, 1000.f), Catch::Matchers::WithinAbs(600., 1e-3));
+    CHECK_THAT(WipeTower2::purge_line_speed(curve, 2, 600.f, 1000.f), Catch::Matchers::WithinAbs(1500., 1e-3));
+    CHECK_THAT(WipeTower2::purge_line_speed(curve, 9, 1500.f, 1000.f), Catch::Matchers::WithinAbs(1500., 1e-3));
+}
+
+// Feedrates of the extruding XY moves in the toolchange wipes of the wipe tower regions.
+static std::vector<double> toolchange_wipe_feedrates(const std::string &tower)
+{
+    std::vector<double> feedrates;
+    bool in_wipe = false;
+    std::istringstream lines(tower);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.rfind("; CP", 0) == 0) {
+            in_wipe = line.rfind("; CP TOOLCHANGE WIPE", 0) == 0;
+            continue;
+        }
+        if (! in_wipe || line.rfind("G1", 0) != 0)
+            continue;
+        std::istringstream tokens(line);
+        bool   has_xy = false;
+        double e = 0., f = 0.;
+        for (std::string token; tokens >> token;) {
+            if (token[0] == 'X' || token[0] == 'Y')
+                has_xy = true;
+            else if (token[0] == 'E')
+                e = string_to_double_decimal_point(std::string_view(token).substr(1));
+            else if (token[0] == 'F')
+                f = string_to_double_decimal_point(std::string_view(token).substr(1));
+        }
+        if (has_xy && e > 0. && f > 0.)
+            feedrates.push_back(f);
+    }
+    return feedrates;
+}
+
+TEST_CASE("The Type 2 tower prints its toolchange wipes at the speed factor curve", "[WipeTower]")
+{
+    auto wipe_feedrates = [](const char *curve) {
+        DynamicPrintConfig config = wipe_tower_toolchange_config("marlin");
+        config.set_deserialize_strict({ { "wipe_tower_type", "type2" },
+                                        { "filament_max_volumetric_speed", "1000,1000" },
+                                        { "filament_prime_tower_speed_factor_curve", curve } });
+        return toolchange_wipe_feedrates(sliced_wipe_tower(config));
+    };
+    const std::vector<double> full = wipe_feedrates("1;1");
+    const std::vector<double> half = wipe_feedrates("0.5;0.5");
+    REQUIRE_FALSE(full.empty());
+    REQUIRE(half.size() == full.size());
+    for (size_t i = 0; i < full.size(); ++i)
+        CHECK_THAT(half[i], Catch::Matchers::WithinAbs(0.5 * full[i], 1.));
 }

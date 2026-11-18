@@ -60,6 +60,14 @@ public:
     // tower's tagged M109 can never disagree.
     static bool wait_for_temp_enabled(const PrintConfig& config);
 
+    // Speed factors of filament_prime_tower_speed_factor_curve, one per purge line, each clamped
+    // to 0.01..5. Empty when the curve is empty or malformed, which keeps the built-in ramp.
+    static std::vector<float> parse_speed_factor_curve(const std::string& curve);
+
+    // Feedrate of purge line `line` after a tool change: the curve factor times the target speed
+    // (the last factor repeats), or the built-in ramp when the curve is empty.
+    static float purge_line_speed(const std::vector<float>& curve, int line, float previous_speed, float target_speed);
+
 	// x			-- x coordinates of wipe tower in mm ( left bottom corner )
 	// y			-- y coordinates of wipe tower in mm ( left bottom corner )
 	// width		-- width of wipe tower in mm ( default 60 mm - leave as it is )
@@ -205,6 +213,7 @@ public:
         float               tower_interface_pre_extrusion_dist = 0.f;
         float               tower_interface_pre_extrusion_length = 0.f;
         float               tower_ironing_area = 4.f;
+        std::vector<float>  speed_factor_curve;
         float               tower_interface_purge_length = 0.f;
         // Tallest layer this filament's nozzle can lay down; caps the sparse layer combination.
         float               max_layer_height = 0.f;

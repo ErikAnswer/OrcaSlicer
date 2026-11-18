@@ -1526,6 +1526,7 @@ static std::vector<std::string> s_Preset_filament_options {/*"filament_colour", 
     "filament_max_volumetric_speed", "filament_adaptive_volumetric_speed",
     "filament_flow_ratio", "filament_density", "filament_adhesiveness_category", "filament_cost", "filament_minimal_purge_on_wipe_tower",
     "filament_tower_interface_pre_extrusion_dist", "filament_tower_interface_pre_extrusion_length", "filament_tower_ironing_area", "filament_tower_interface_purge_volume",
+    "filament_prime_tower_speed_factor_curve",
     "filament_tower_interface_print_temp",
     "nozzle_temperature", "nozzle_temperature_initial_layer",
     // BBS
