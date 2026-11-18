@@ -3421,6 +3421,13 @@ void TabPrint::build()
         optgroup->append_single_option_line("wipe_tower_extra_rib_length", "multimaterial_settings_prime_tower#extra-rib-length");
         optgroup->append_single_option_line("wipe_tower_rib_width", "multimaterial_settings_prime_tower#rib-width");
         optgroup->append_single_option_line("wipe_tower_fillet_wall", "multimaterial_settings_prime_tower#fillet-wall");
+        optgroup->append_single_option_line("prime_tower_side_scrape", "multimaterial_settings_prime_tower");
+        optgroup->append_single_option_line("prime_tower_side_scrape_length", "multimaterial_settings_prime_tower");
+        optgroup->append_single_option_line("prime_tower_side_scrape_height", "multimaterial_settings_prime_tower");
+        optgroup->append_single_option_line("prime_tower_side_scrape_speed", "multimaterial_settings_prime_tower");
+        optgroup->append_single_option_line("prime_tower_side_scrape_wall_gap", "multimaterial_settings_prime_tower");
+        optgroup->append_single_option_line("prime_tower_side_scrape_point_spacing", "multimaterial_settings_prime_tower");
+        optgroup->append_single_option_line("prime_tower_side_scrape_along_length", "multimaterial_settings_prime_tower");
         optgroup->append_single_option_line("wipe_tower_no_sparse_layers", "multimaterial_settings_prime_tower#no-sparse-layers");
         optgroup->append_single_option_line("wipe_tower_sparse_layers_combination", "multimaterial_settings_prime_tower#combine-sparse-layers");
         optgroup->append_single_option_line("single_extruder_multi_material_priming", "multimaterial_settings_prime_tower#prime-all-printing-extruders");

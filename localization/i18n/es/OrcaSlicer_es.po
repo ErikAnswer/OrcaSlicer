@@ -20982,6 +20982,66 @@ msgstr "Pared redondeada"
 msgid "The wall of prime tower will fillet."
 msgstr "La pared de la torre de purga se redondeará."
 
+# AI Translated
+msgid "Side scrape after tool change"
+msgstr "Rascado lateral tras el cambio de herramienta"
+
+# AI Translated
+msgid "After a tool change and before the wipe line, move the nozzle to the left or right wall of the prime tower and do a diagonal lift scrape (travel only, no extrusion). This scrapes the filament that oozed from the parked nozzle onto the side wall instead of letting it land on the prime tower top surface. Only available with the Type 2 wipe tower."
+msgstr "Tras un cambio de herramienta y antes de la línea de limpieza, lleva la boquilla a la pared izquierda o derecha de la torre de purga y hace un rascado diagonal ascendente (solo desplazamiento, sin extruir). Así el filamento que ha goteado la boquilla aparcada se queda pegado a la pared lateral en lugar de caer sobre la superficie superior de la torre. Solo disponible con la torre de purga «Tipo 2»."
+
+# AI Translated
+msgid "Side scrape length"
+msgstr "Longitud del rascado lateral"
+
+# AI Translated
+msgid "Horizontal distance the nozzle travels toward the prime tower side wall during the diagonal scrape."
+msgstr "Distancia horizontal que recorre la boquilla hacia la pared lateral de la torre de purga durante el rascado diagonal."
+
+# AI Translated
+msgid "Side scrape lift height"
+msgstr "Altura de subida del rascado lateral"
+
+# AI Translated
+msgid "How far the nozzle descends below the current prime tower top before the diagonal scrape. The descent is clamped so the nozzle stays above the prime tower's brim and first layer. Layers with no room left for a descent get no scrape."
+msgstr "Cuánto baja la boquilla por debajo de la parte superior actual de la torre de purga antes del rascado diagonal. La bajada se limita para que la boquilla quede por encima del borde de adherencia y de la primera capa de la torre. Las capas sin margen para bajar no tienen rascado."
+
+# AI Translated
+msgid "Side scrape speed"
+msgstr "Velocidad del rascado lateral"
+
+# AI Translated
+msgid "Movement speed of the diagonal side scrape."
+msgstr "Velocidad de movimiento del rascado lateral diagonal."
+
+# AI Translated
+msgid "Side scrape wall gap"
+msgstr "Separación del rascado lateral con la pared"
+
+# AI Translated
+msgid "Distance kept between the end of the diagonal side scrape and the outer surface of the prime tower wall. A positive value keeps the scrape outside the wall."
+msgstr "Distancia que se deja entre el final del rascado lateral diagonal y la superficie exterior de la pared de la torre de purga. Un valor positivo mantiene el rascado fuera de la pared."
+
+# AI Translated
+msgid "Side scrape point spacing"
+msgstr "Separación entre puntos del rascado lateral"
+
+# AI Translated
+msgid "Target distance between consecutive side scrape start points along one side wall. Scrape starts alternate between the left and right walls and are spread along the straight part of each wall, so the oozed filament does not pile up at a single spot."
+msgstr "Distancia objetivo entre puntos de inicio consecutivos del rascado a lo largo de una pared lateral. Los rascados alternan entre la pared izquierda y la derecha y se reparten por la parte recta de cada pared, para que el filamento goteado no se acumule en un solo punto."
+
+# AI Translated
+msgid "Side scrape along-wall length"
+msgstr "Recorrido del rascado lateral a lo largo de la pared"
+
+# AI Translated
+msgid "Upper bound for the empty travel along the side wall right after the diagonal scrape, which smears the oozed filament further along the wall. The travel never leaves the straight part of the wall."
+msgstr "Límite del desplazamiento en vacío a lo largo de la pared lateral justo después del rascado diagonal, que extiende el filamento goteado por la pared. El desplazamiento nunca sale de la parte recta de la pared."
+
+# AI Translated
+msgid "Enable the side scrape after tool change to use this setting."
+msgstr "Active el rascado lateral tras el cambio de herramienta para usar este ajuste."
+
 msgid "The extruder to use when printing perimeter of the wipe tower. Set to 0 to use the one that is available (non-soluble would be preferred)."
 msgstr "Extrusor usado para imprimir el perímetro de la torre de purga. Ajuste a 0 para usar el único disponible (no soluble preferentemente)."
 
