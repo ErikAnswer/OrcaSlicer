@@ -1212,7 +1212,7 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("wipe_tower_extra_rib_length", have_rib_wall, -1, rib_wall_reason);
     toggle_line("wipe_tower_rib_width", have_rib_wall, -1, rib_wall_reason);
     toggle_line("wipe_tower_fillet_wall", have_rib_wall, -1, rib_wall_reason);
-    const bool have_side_scrape_tower = have_prime_tower && supports_wipe_tower_2 && !is_belt_printer;
+    const bool have_side_scrape_tower = have_prime_tower && supports_wipe_tower_2 && !is_belt_printer && !bSEMM;
     toggle_line("prime_tower_side_scrape", have_side_scrape_tower, -1, _L("Enable the prime tower and select wipe tower Type 2 on a non-Bambu, non-belt printer."));
     const bool have_side_scrape = have_side_scrape_tower && config->opt_bool("prime_tower_side_scrape");
     for (auto el : {"prime_tower_side_scrape_length", "prime_tower_side_scrape_height", "prime_tower_side_scrape_speed", "prime_tower_side_scrape_wall_gap", "prime_tower_side_scrape_point_spacing", "prime_tower_side_scrape_along_length"})

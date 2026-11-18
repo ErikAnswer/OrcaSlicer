@@ -1054,10 +1054,11 @@ bool WipeTower2::wait_for_temp_enabled(const PrintConfig& config)
 
 double WipeTower2::side_scrape_margin(const PrintConfig& config)
 {
-    if (!config.prime_tower_side_scrape.value)
+    if (!config.prime_tower_side_scrape.value || config.wipe_tower_type.value != WipeTowerType::Type2 ||
+        config.single_extruder_multi_material.value)
         return 0.;
-    return std::max(0., config.prime_tower_side_scrape_wall_gap.value + config.prime_tower_side_scrape_length.value +
-                            config.nozzle_diameter.get_at(0));
+    return std::max(0., config.prime_tower_side_scrape_wall_gap.value) + config.prime_tower_side_scrape_length.value +
+           config.nozzle_diameter.get_at(0);
 }
 
 WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& default_region_config,int plate_idx, Vec3d plate_origin, const std::vector<std::vector<float>>& wiping_matrix, size_t initial_tool) :
@@ -1868,7 +1869,7 @@ void WipeTower2::toolchange_Change(
     if (wait_for_temp_here && !wait_beside_tower)
         writer.set_extruder_temp(wait_for_temp, true, wait_for_temp_tag());
 
-    if (m_side_scrape && wait_beside_tower && !is_first_layer())
+    if (m_side_scrape && !m_semm && wait_beside_tower && !is_first_layer())
         toolchange_side_scrape(writer);
 
     writer.append("[deretraction_from_wipe_tower_generator]\n");
@@ -1985,7 +1986,7 @@ void WipeTower2::toolchange_side_scrape(WipeTowerWriter2& writer)
         along1 = std::clamp(along0 + (entry.y() >= along0 ? -smear : smear), along_lo, along_hi);
 
     const float scrape_x = nominal + outward * (0.5f * m_perimeter_width + m_side_scrape_wall_gap);
-    const float start_x  = scrape_x + outward * m_side_scrape_length;
+    const float start_x  = nominal + outward * (0.5f * m_perimeter_width + std::max(0.f, m_side_scrape_wall_gap) + m_side_scrape_length);
     const float feedrate = m_side_scrape_speed * 60.f;
     // Z is resolved against the real tower height in GCode::append_tcr2(), which differs from the planned
     // one on a compacted tower.
