@@ -1080,7 +1080,9 @@ TEST_CASE("The prime tower speed factor curve parses comma-separated factors", "
 {
     CHECK(WipeTower2::parse_speed_factor_curve("").empty());
     CHECK(WipeTower2::parse_speed_factor_curve("0.5, 1,2") == std::vector<float>{ 0.5f, 1.f, 2.f });
-    CHECK(WipeTower2::parse_speed_factor_curve("0,9") == std::vector<float>{ 0.01f, 5.f });
+    CHECK(WipeTower2::parse_speed_factor_curve("0.01,5") == std::vector<float>{ 0.01f, 5.f });
+    CHECK(WipeTower2::parse_speed_factor_curve("0,33,0,375").empty());
+    CHECK(WipeTower2::parse_speed_factor_curve("0.5,6").empty());
     CHECK(WipeTower2::parse_speed_factor_curve("0.5,abc").empty());
     CHECK(WipeTower2::parse_speed_factor_curve("0.5;1").empty());
     CHECK(WipeTower2::parse_speed_factor_curve(" ").empty());
@@ -1108,15 +1110,18 @@ TEST_CASE("A speed factor curve sets each purge line's speed and repeats its las
     CHECK_THAT(WipeTower2::purge_line_speed(curve, 9, 1500.f, 1000.f), Catch::Matchers::WithinAbs(1500., 1e-3));
 }
 
-// Feedrates of the extruding XY moves in the toolchange wipes of the wipe tower regions.
-static std::vector<double> toolchange_wipe_feedrates(const std::string &tower)
+// Per toolchange wipe of the wipe tower regions, the feedrates of its extruding XY moves, without
+// consecutive repeats: the tower writer only emits F when it changes.
+static std::vector<std::vector<double>> toolchange_wipe_feedrates(const std::string &tower)
 {
-    std::vector<double> feedrates;
+    std::vector<std::vector<double>> wipes;
     bool in_wipe = false;
     std::istringstream lines(tower);
     for (std::string line; std::getline(lines, line);) {
         if (line.rfind("; CP", 0) == 0) {
             in_wipe = line.rfind("; CP TOOLCHANGE WIPE", 0) == 0;
+            if (in_wipe)
+                wipes.emplace_back();
             continue;
         }
         if (! in_wipe || line.rfind("G1", 0) != 0)
@@ -1132,10 +1137,10 @@ static std::vector<double> toolchange_wipe_feedrates(const std::string &tower)
             else if (token[0] == 'F')
                 f = string_to_double_decimal_point(std::string_view(token).substr(1));
         }
-        if (has_xy && e > 0. && f > 0.)
-            feedrates.push_back(f);
+        if (has_xy && e > 0. && f > 0. && (wipes.back().empty() || std::abs(wipes.back().back() - f) > 0.5))
+            wipes.back().push_back(f);
     }
-    return feedrates;
+    return wipes;
 }
 
 TEST_CASE("The Type 2 tower prints its toolchange wipes at the speed factor curve", "[WipeTower]")
@@ -1147,10 +1152,20 @@ TEST_CASE("The Type 2 tower prints its toolchange wipes at the speed factor curv
                                         { "filament_prime_tower_speed_factor_curve", curve } });
         return toolchange_wipe_feedrates(sliced_wipe_tower(config));
     };
-    const std::vector<double> full = wipe_feedrates("1;1");
-    const std::vector<double> half = wipe_feedrates("0.5;0.5");
+    const std::vector<std::vector<double>> full  = wipe_feedrates("1;1");
+    const std::vector<std::vector<double>> curve = wipe_feedrates("0.3,0.6,1;0.3,0.6,1");
     REQUIRE_FALSE(full.empty());
-    REQUIRE(half.size() == full.size());
-    for (size_t i = 0; i < full.size(); ++i)
-        CHECK_THAT(half[i], Catch::Matchers::WithinAbs(0.5 * full[i], 1.));
+    REQUIRE(curve.size() == full.size());
+    const std::vector<double> factors{ 0.3, 0.6, 1. };
+    size_t whole_ramps = 0;
+    for (size_t i = 0; i < full.size(); ++i) {
+        REQUIRE(full[i].size() == 1);
+        REQUIRE_FALSE(curve[i].empty());
+        REQUIRE(curve[i].size() <= factors.size());
+        for (size_t line = 0; line < curve[i].size(); ++line)
+            CHECK_THAT(curve[i][line], Catch::Matchers::WithinAbs(factors[line] * full[i].front(), 1.));
+        if (curve[i].size() == factors.size())
+            ++whole_ramps;
+    }
+    CHECK(whole_ramps > 0);
 }

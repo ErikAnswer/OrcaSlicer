@@ -3446,8 +3446,9 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Speed ramp of the purge lines on the prime tower after a tool change, as comma-separated "
                      "multipliers of the tower purge speed, one per line. For example \"0.33,0.375,0.458,0.875\" "
                      "prints the 1st line at 33%, the 2nd at 37.5% and so on; the last value is reused for the "
-                     "remaining lines. Each value is clamped to 0.01 ~ 5.0 and the filament's maximum volumetric "
-                     "speed still applies. Leave empty to keep the built-in ramp. Only used by the Type 2 wipe tower.");
+                     "remaining lines. Use a decimal point; each value must be between 0.01 and 5.0, otherwise the "
+                     "built-in ramp is used. The filament's maximum volumetric speed still applies. Leave empty to "
+                     "keep the built-in ramp. Only used by the Type 2 wipe tower.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings { "" });
 

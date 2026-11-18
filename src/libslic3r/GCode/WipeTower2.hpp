@@ -60,8 +60,8 @@ public:
     // tower's tagged M109 can never disagree.
     static bool wait_for_temp_enabled(const PrintConfig& config);
 
-    // Speed factors of filament_prime_tower_speed_factor_curve, one per purge line, each clamped
-    // to 0.01..5. Empty when the curve is empty or malformed, which keeps the built-in ramp.
+    // Speed factors of filament_prime_tower_speed_factor_curve, one per purge line. Empty when the
+    // curve is empty, malformed or has a factor outside 0.01..5, which keeps the built-in ramp.
     static std::vector<float> parse_speed_factor_curve(const std::string& curve);
 
     // Feedrate of purge line `line` after a tool change: the curve factor times the target speed

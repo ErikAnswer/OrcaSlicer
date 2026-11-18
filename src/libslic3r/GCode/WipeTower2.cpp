@@ -41,6 +41,7 @@
 #include "libslic3r/libslic3r.h"
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/log/trivial.hpp>
 #include "libslic3r/Config.hpp"
 
 
@@ -1039,9 +1040,12 @@ std::vector<float> WipeTower2::parse_speed_factor_curve(const std::string& curve
         std::istringstream token_stream(token);
         token_stream.imbue(std::locale::classic());
         double factor = 0.;
-        if (!(token_stream >> factor) || !(token_stream >> std::ws).eof() || !std::isfinite(factor))
+        if (!(token_stream >> factor) || !(token_stream >> std::ws).eof() || !(factor >= 0.01 && factor <= 5.)) {
+            BOOST_LOG_TRIVIAL(warning) << "Ignoring filament_prime_tower_speed_factor_curve \"" << curve
+                                       << "\": expected comma-separated factors between 0.01 and 5 with a decimal point";
             return {};
-        factors.push_back(std::clamp(float(factor), 0.01f, 5.f));
+        }
+        factors.push_back(float(factor));
     }
     return factors;
 }
