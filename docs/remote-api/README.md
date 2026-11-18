@@ -72,9 +72,12 @@ Base URL: `http://<host>:13130/api/v1`
 | POST | `/preset/save` | Save the current settings as a user preset (`{"type","name"}`), no dialog; `slot` saves one filament slot's preset and moves only that slot; a filament save past the temperature safety check needs `allow_temperature_pairs` |
 | POST | `/preset/config` | The full config of a named preset as saved, without the unsaved edits of the selected one (`{"type","name"}`; credentials redacted) |
 | DELETE | `/preset` | Delete a user preset (never a system, selected or inherited-from one) |
+| GET | `/printer/status` | What the selected Bambu Lab printer is doing: state, stage, job progress, temperatures, fans, HMS faults, from OrcaSlicer's own connection |
 | GET | `/printer/slots` | The printer's filament trays: an Elegoo Centauri Carbon 2's CANVAS (read now), or the selected Bambu Lab printer's AMS and external spool |
 | GET | `/printer/slot_mapping` | Which tray each filament of the plate will print from (on Bambu: the Send dialog's automatic choice) |
 | PUT | `/printer/slot_mapping` | CANVAS only: set that mapping (`{"mapping":[{"filament","canvas_id","tray_id"}]}`); the Send dialog opens pre-filled |
+| GET | `/printer/devices` | The printers the Device tab lists (id, name, model, connection, online, connected, printing) and which one is selected |
+| PUT | `/printer/device` | Select one of them (`{"id"}`), as a click in the Device tab's printer list does |
 | WS | `/events?token=…` | Live event stream |
 | GET | `/plates` | List the plates: index, name, current, locked, objects on each |
 | POST | `/plates` | Add a plate (`{"select": true}` by default) |
@@ -476,6 +479,88 @@ comes back with `tray` null, a warning, a problem and `valid` false: the Send di
 pick one. `filament_id` on a filament and on its tray (the AMS's own id for the spool) are equal when the tray holds
 the filament the slot's preset describes; names differ (a system preset carries its printer, "@BBL P1S"). There is no `PUT` for Bambu printers: the choice is made in the Send dialog, which keeps no store this
 API could fill.
+
+## Printer status (Bambu Lab)
+
+`GET /printer/status` reads the Bambu Lab printer selected in the Device tab from the state OrcaSlicer's own
+connection keeps (the same `MachineObject` the Device tab draws), so the answer is instant and nothing is sent to
+the printer. Builds that serve it list `bambu_status` in `GET /status` `capabilities`. The unsupported replies are
+the tray routes' (`not_supported` for a preset that is not a Bambu Lab one, `no_printer_selected`,
+`printer_offline`).
+
+```json
+{ "supported": true, "kind": "bambu", "connected": true,
+  "printer": { "name": "P1S", "model": "Bambu Lab P1S", "connection": "lan" },
+  "updated_s_ago": 1.2,
+  "state": "RUNNING", "stage": 0, "stage_text": "Printing", "stage_remaining_s": 0,
+  "job": { "name": "benchy", "file": "benchy.gcode.3mf", "progress_percent": 42, "remaining_s": 2520,
+           "layer": { "current": 63, "total": 150 }, "plate_index": 0, "source": "local" },
+  "print_error": null,
+  "temps": { "nozzle": { "actual": 255, "target": 255 },
+             "nozzles": [ { "extruder": 0, "actual": 255, "target": 255, "diameter": 0.4 } ],
+             "bed": { "actual": 90.0, "target": 90.0 }, "chamber": null },
+  "fans": { "part": 100, "aux": 0, "chamber": 0 },
+  "speed_percent": 100,
+  "hms": [ { "code": "0700200000020001", "level": "common", "read": false,
+             "message": "AMS A Slot 1 filament has run out. Please insert a new filament." } ] }
+```
+
+The values are the printer's own, not interpreted: `state` is its `gcode_state` (`IDLE`, `PREPARE`, `RUNNING`,
+`PAUSE`, `FINISH`, `FAILED`, `SLICING`; empty before the first push), `stage` the number behind the Device tab's
+stage text (`stage_text`, in the UI language), `print_error` the code the printer reports for a stopped job
+(`null` when none), `hms` the Health Management System items with the long code the Bambu wiki is keyed by. Each
+print error and HMS item carries `message`, the sentence the Device tab shows for that code, from OrcaSlicer's HMS
+files in the UI language (`""` when the files have none). A cancelled job is `FAILED` with no code or with
+`0300-400C` ("The task was canceled."). `job` is always present and holds the last job once one has run;
+`layer` is `null` on printers that do not report layers. `remaining_s` is the printer's own estimate. `chamber`
+is `null` on printers without a chamber sensor. `updated_s_ago` is the time since OrcaSlicer last heard from the
+printer; a connection that has gone quiet shows there before `printer_offline` does.
+
+## Printer devices
+
+The Device tab keeps its own list of printers, separate from the printer presets: the account's cloud printers and
+the LAN printers whose access code OrcaSlicer holds. Which one is selected there decides what the Bambu Lab tray
+routes read. `GET /printer/devices` lists them as the tab does, by name, and `PUT /printer/device` selects one.
+Builds with these routes list `printer_select` in `GET /status` `capabilities`.
+
+```json
+GET /printer/devices
+{
+  "agent": "bbl",
+  "selected": "01P00A000000000",
+  "devices": [
+    {"id": "01P00A000000000", "name": "P1S workshop", "model": "Bambu Lab P1S", "model_id": "C12",
+     "connection": "lan", "ip": "192.0.2.40", "online": true, "connected": true, "printing": false, "selected": true},
+    {"id": "03W00A000000000", "name": "X1C office", "model": "Bambu Lab X1 Carbon", "model_id": "BL-P001",
+     "connection": "cloud", "ip": null, "online": false, "connected": false, "printing": false, "selected": false}
+  ]
+}
+```
+
+`agent` is the printer agent whose list this is (`bbl` for Bambu Lab). `online` is the printer's presence as
+OrcaSlicer last saw it; `connected` is whether OrcaSlicer holds a live connection to it, which only the selected
+printer can; `printing` follows the printer's own state. `selected` is null when nothing is selected.
+
+```json
+PUT /printer/device   {"id": "03W00A000000000"}
+{
+  "changed": true,
+  "before": "01P00A000000000",
+  "selected": true,
+  "device": {"id": "03W00A000000000", "name": "X1C office", "...": "as above", "selected": true}
+}
+```
+
+The selection goes through the Device tab's own flow when the tab has been built (its panels refresh, as after a
+click) and through the DeviceManager otherwise. The reply waits up to 2 s for it to settle; `selected` says whether
+it had. Selecting the printer already selected changes nothing (`changed: false`): re-selecting a LAN printer would
+disconnect and reconnect it. A LAN printer is connected on selection, so `connected` in the reply is usually still
+false; the tray routes answer `printer_offline` until the connection is up. The previous printer is disconnected,
+which does not affect a print it is running. The switch is noted in the MCP panel.
+
+An unknown id gets 404 `device_not_found` with the ids and names the list holds; a LAN printer OrcaSlicer has no
+access code for is not in the list and is added in the Device tab, by hand. 503 `no_device_manager` means
+OrcaSlicer has no printer agent loaded.
 
 ## Plates
 
@@ -1307,5 +1392,9 @@ row whose group is not listed still gets a group, from its own `ts` and `time`.
 - **Survives GUI recreate.** Changing language/skin rebuilds the GUI; the server
   keeps running and slice-event subscriptions rebind onto the new window, so WS
   clients stay connected.
-- **No SO_REUSEADDR pitfalls.** The listener sets `SO_REUSEADDR`, so restarting
-  the app rebinds the port cleanly even if a prior socket is in `TIME_WAIT`.
+- **One server per port.** Restarting the app rebinds the port at once even while
+  a prior socket is in `TIME_WAIT`: macOS and Linux set `SO_REUSEADDR` for that;
+  Windows needs no option and sets `SO_EXCLUSIVEADDRUSE` instead, because there
+  `SO_REUSEADDR` would let a second OrcaSlicer bind the same port as the first.
+  A second OrcaSlicer (File > New Window, or any program already on the port) starts
+  without the server, and Preferences says "Couldn't start: port N may be in use".
