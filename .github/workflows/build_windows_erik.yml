@@ -14,7 +14,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !inputs.publish }}
 
 jobs:
   build_windows:
@@ -48,12 +48,15 @@ jobs:
           echo "tag=erik-v${base}-mcp.${ordinal}" >> "$GITHUB_OUTPUT"
           echo "asset=OrcaSlicer-MCP-${base}-mcp.${ordinal}-erik-win64-installer.exe" >> "$GITHUB_OUTPUT"
 
-      - name: Refuse to overwrite an existing release
+      - name: Refuse to overwrite a published release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.name.outputs.tag }}
         run: |
-          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          draft=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null || echo none)
+          if [[ "$draft" == "true" ]]; then
+            gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --yes
+          elif [[ "$draft" != "none" ]]; then
             echo "::error::Release $TAG already exists: bump ORCA_MCP_RELEASE in version.inc"
             exit 1
           fi
