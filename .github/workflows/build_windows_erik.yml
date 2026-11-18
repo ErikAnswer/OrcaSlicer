@@ -2,10 +2,19 @@ name: Build Windows x64 (erik)
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the installer as the erik-v<version>-mcp.<N> release
+        type: boolean
+        default: false
+      notes:
+        description: Release notes (used only when publishing)
+        type: string
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !inputs.publish }}
 
 jobs:
   build_windows:
@@ -15,3 +24,61 @@ jobs:
       os: windows-latest
       arch: x64
     secrets: inherit
+
+  release:
+    name: Publish release
+    needs: build_windows
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout version.inc
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: version.inc
+          sparse-checkout-cone-mode: false
+
+      - name: Read the release name
+        id: name
+        run: |
+          base=$(sed -n "s/^set(SoftFever_VERSION \"\(.*\)\")/\1/p" version.inc)
+          ordinal=$(sed -n "s/^set(ORCA_MCP_RELEASE \"\(.*\)\")/\1/p" version.inc)
+          [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$ordinal" =~ ^[0-9]+$ ]]
+          echo "tag=erik-v${base}-mcp.${ordinal}" >> "$GITHUB_OUTPUT"
+          echo "asset=OrcaSlicer-MCP-${base}-mcp.${ordinal}-erik-win64-installer.exe" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to overwrite a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.name.outputs.tag }}
+        run: |
+          draft=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null || echo none)
+          if [[ "$draft" == "true" ]]; then
+            gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --yes
+          elif [[ "$draft" != "none" ]]; then
+            echo "::error::Release $TAG already exists: bump ORCA_MCP_RELEASE in version.inc"
+            exit 1
+          fi
+
+      - name: Download the installer
+        uses: actions/download-artifact@v8
+        with:
+          pattern: OrcaSlicer_Windows_*_x64
+          path: installer
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.name.outputs.tag }}
+          ASSET: ${{ steps.name.outputs.asset }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          shopt -s nullglob
+          found=(installer/*.exe)
+          [[ ${#found[@]} -eq 1 ]]
+          mv "${found[0]}" "$ASSET"
+          sha=$(sha256sum "$ASSET" | cut -d" " -f1)
+          printf "%s\n\nBuild run %s, commit %s. SHA-256 %s.\n" "$NOTES" "$GITHUB_RUN_ID" "${GITHUB_SHA::10}" "$sha" > notes.md
+          gh release create "$TAG" "$ASSET" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
