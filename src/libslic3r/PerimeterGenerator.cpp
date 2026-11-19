@@ -72,6 +72,8 @@ public:
     bool                                is_narrow_wall_hole = false;
     // Children contour, may be both CCW and CW oriented (outer contours or holes).
     std::vector<PerimeterGeneratorLoop> children;
+    // Wall of a circle handled by the circle compensation, printed at the circle compensation speed.
+    bool                                circle_compensation = false;
 
     PerimeterGeneratorLoop(const Polygon &polygon, unsigned short depth, bool is_contour, bool is_small_width_perimeter = false) :
         polygon(polygon), is_contour(is_contour), is_smaller_width_perimeter(is_small_width_perimeter), depth(depth) {}
@@ -253,7 +255,9 @@ static ExtrusionEntityCollection traverse_loops(const PerimeterGenerator &perime
             paths.emplace_back(std::move(path));
         }
 
-        coll.append(ExtrusionLoop(std::move(paths), loop_role));
+        ExtrusionLoop extrusion_loop(std::move(paths), loop_role);
+        extrusion_loop.circle_compensation = loop.circle_compensation;
+        coll.append(std::move(extrusion_loop));
     }
 
     // Append thin walls to the nearest-neighbor search (only for first iteration)
@@ -404,8 +408,21 @@ struct PerimeterGeneratorArachneExtrusion
     bool is_contour = false;
 };
 
+static bool is_compensated_extrusion(const Arachne::ExtrusionLine &extrusion, bool is_contour, const CircleBoundaries &circles)
+{
+    if (circles.empty())
+        return false;
+    Polygon loop;
+    loop.points.reserve(extrusion.junctions.size());
+    for (const Arachne::ExtrusionJunction &junction : extrusion.junctions)
+        loop.points.emplace_back(junction.p);
+    if (loop.points.size() > 1 && loop.points.front() == loop.points.back())
+        loop.points.pop_back();
+    return is_compensated_loop(loop, !is_contour, circles);
+}
+
 static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& perimeter_generator, std::vector<PerimeterGeneratorArachneExtrusion>& pg_extrusions,
-    bool &steep_overhang_contour, bool &steep_overhang_hole)
+    bool &steep_overhang_contour, bool &steep_overhang_hole, const CircleBoundaries &compensated_circles)
 {
     // Detect steep overhangs
     bool overhangs_reverse = perimeter_generator.config->overhang_reverse &&
@@ -564,6 +581,7 @@ static ExtrusionEntityCollection traverse_extrusions(const PerimeterGenerator& p
             if (extrusion->is_closed) {
                 ExtrusionLoop extrusion_loop(std::move(paths), pg_extrusion.is_contour ? elrDefault : elrHole);
                 extrusion_loop.inset_idx = extrusion->inset_idx;
+                extrusion_loop.circle_compensation = is_compensated_extrusion(*extrusion, pg_extrusion.is_contour, compensated_circles);
                 if ((perimeter_generator.config->wall_direction == WallDirection::CounterClockwise) ==
                     (pg_extrusion.is_contour || pg_extrusions.size() == 2))
                     extrusion_loop.make_counter_clockwise();
@@ -1454,6 +1472,15 @@ static void defer_unsupported_loops(const PerimeterGenerator &perimeter_generato
             loop->print_after_infill = true;
 }
 
+CircleBoundaries PerimeterGenerator::collect_compensated_circles() const
+{
+    CircleBoundaries circles;
+    if (this->compatible_regions != nullptr)
+        for (const LayerRegion *layerm : *this->compatible_regions)
+            append(circles, layerm->compensated_circles);
+    return circles;
+}
+
 void PerimeterGenerator::process_classic()
 {
     group_region_by_fuzzify(*this);
@@ -1525,6 +1552,7 @@ void PerimeterGenerator::process_classic()
     // we need to process each island separately because we might have different
     // extra perimeters for each one
     Surfaces all_surfaces = this->slices->surfaces;
+    const CircleBoundaries compensated_circles = this->collect_compensated_circles();
 
     process_no_bridge(all_surfaces, perimeter_spacing, ext_perimeter_width);
     // BBS: don't simplify too much which influence arc fitting when export gcode if arc_fitting is enabled
@@ -1551,6 +1579,7 @@ void PerimeterGenerator::process_classic()
         // Set the topmost layer to be one wall
         if (loop_number > 0 && only_one_wall_top && this->upper_slices == nullptr)
             loop_number = 0;
+        const CircleBoundaries surface_circles = find_compensated_circles(surface.expolygon, compensated_circles);
 
         ExPolygons last        = union_ex(surface.expolygon.simplify_p(surface_simplify_resolution));
         ExPolygons gaps;
@@ -1782,6 +1811,14 @@ void PerimeterGenerator::process_classic()
                 if (! dropped_wall_bands.empty())
                     one_wall_top_reclaimed = diff_ex(dropped_wall_bands, one_wall_top_region);
             }
+
+            if (! surface_circles.empty())
+                for (int d = 0; d <= loop_number; ++ d) {
+                    for (PerimeterGeneratorLoop &loop : contours[d])
+                        loop.circle_compensation = is_compensated_loop(loop.polygon, false, surface_circles);
+                    for (PerimeterGeneratorLoop &loop : holes[d])
+                        loop.circle_compensation = is_compensated_loop(loop.polygon, true, surface_circles);
+                }
 
             // nest loops: holes first
             for (int d = 0; d <= loop_number; ++ d) {
@@ -2671,6 +2708,7 @@ void PerimeterGenerator::process_arachne()
     }
 
     Surfaces all_surfaces = this->slices->surfaces;
+    const CircleBoundaries compensated_circles = this->collect_compensated_circles();
 
     process_no_bridge(all_surfaces, perimeter_spacing, ext_perimeter_width);
     // BBS: don't simplify too much which influence arc fitting when export gcode if arc_fitting is enabled
@@ -2698,6 +2736,7 @@ void PerimeterGenerator::process_arachne()
       for (size_t surface_idx = range.begin(); surface_idx < range.end(); ++surface_idx) {
         const Surface        &surface = all_surfaces[surface_idx];
         ArachneSurfaceResult &result  = results[surface_idx];
+        const CircleBoundaries surface_circles = find_compensated_circles(surface.expolygon, compensated_circles);
             coord_t bead_width_0 = ext_perimeter_spacing;
             // detect how many perimeters must be generated for this island
             int loop_number = this->config->wall_loops + surface.extra_perimeters - 1; // 0-indexed loops
@@ -3100,7 +3139,7 @@ void PerimeterGenerator::process_arachne()
                 steep_overhang_contour = true;
                 steep_overhang_hole    = true;
             }
-            if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(*this, ordered_extrusions, steep_overhang_contour, steep_overhang_hole); !extrusion_coll.empty()) {
+            if (ExtrusionEntityCollection extrusion_coll = traverse_extrusions(*this, ordered_extrusions, steep_overhang_contour, steep_overhang_hole, surface_circles); !extrusion_coll.empty()) {
                 if (config->overhang_reverse) {
                     reorient_perimeters(extrusion_coll, steep_overhang_contour, steep_overhang_hole,
                                         this->config->overhang_reverse_internal_only);

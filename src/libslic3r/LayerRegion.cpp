@@ -974,8 +974,9 @@ CircleCompensationParams LayerRegion::circle_compensation_params() const
 void LayerRegion::apply_circle_compensation(const CircleBoundaries *outline)
 {
     const CircleCompensationParams params = this->circle_compensation_params();
+    this->compensated_circles.clear();
     for (Surface &surface : this->slices.surfaces)
-        surface.expolygon = compensate_circles(surface.expolygon, params, outline);
+        surface.expolygon = compensate_circles(surface.expolygon, params, outline, &this->compensated_circles);
 }
 
 void LayerRegion::prepare_fill_surfaces()

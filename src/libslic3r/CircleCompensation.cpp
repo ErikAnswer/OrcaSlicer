@@ -16,6 +16,7 @@ const double circle_max_variance  = 5. * scale_(0.01) * scale_(0.01);
 const double circle_min_radius    = scale_(0.05);
 const double boundary_center_tolerance   = scale_(0.05);
 const double boundary_diameter_tolerance = scale_(0.1);
+const double compensated_diameter_tolerance = scale_(0.2);
 
 double clamp_correction(double value, double min_value, double max_value)
 {
@@ -34,14 +35,17 @@ bool keeps_topology(const ExPolygon &original, const ExPolygon &compensated)
     return std::abs(merged.front().area() - compensated.area()) <= std::abs(compensated.area()) * 1e-3;
 }
 
+bool matches_circle(const CircleBoundaries &circles, const Point &center, double diameter, bool hole, double diameter_tolerance)
+{
+    return std::any_of(circles.begin(), circles.end(), [&](const CircleBoundary &circle) {
+        return circle.hole == hole && (circle.center - center).cast<double>().norm() <= boundary_center_tolerance &&
+               std::abs(circle.diameter - diameter) <= diameter_tolerance;
+    });
+}
+
 bool is_outline_circle(const CircleBoundaries *outline, const Point &center, double diameter, bool hole)
 {
-    if (outline == nullptr)
-        return true;
-    return std::any_of(outline->begin(), outline->end(), [&](const CircleBoundary &boundary) {
-        return boundary.hole == hole && (boundary.center - center).cast<double>().norm() <= boundary_center_tolerance &&
-               std::abs(boundary.diameter - diameter) <= boundary_diameter_tolerance;
-    });
+    return outline == nullptr || matches_circle(*outline, center, diameter, hole, boundary_diameter_tolerance);
 }
 
 } // namespace
@@ -133,32 +137,65 @@ CircleBoundaries detect_circle_boundaries(const ExPolygons &outline)
     return boundaries;
 }
 
-ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params, const CircleBoundaries *outline)
+ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params, const CircleBoundaries *outline,
+                             CircleBoundaries *compensated_circles)
 {
-    const double diameter_limit = scale_(params.diameter_limit);
-    ExPolygon    compensated    = expolygon;
-    bool         changed        = false;
-    Point        center;
-    double       diameter = 0.;
+    const double     diameter_limit = scale_(params.diameter_limit);
+    ExPolygon        compensated    = expolygon;
+    CircleBoundaries handled;
+    CircleBoundaries original;
+    bool             changed = false;
+    Point            center;
+    double           diameter = 0.;
 
-    if (is_approx_circle(compensated.contour, center, diameter) && diameter <= diameter_limit &&
-        is_outline_circle(outline, center, diameter, false)) {
-        const double delta = circle_contour_correction(params, unscale<double>(diameter));
-        if (delta != 0. && change_circle_radius(compensated.contour, center, diameter / 2., scale_(delta)))
+    auto compensate = [&](Polygon &polygon, bool hole) {
+        if (!is_approx_circle(polygon, center, diameter) || diameter > diameter_limit || !is_outline_circle(outline, center, diameter, hole))
+            return;
+        original.push_back({ center, diameter, hole });
+        const double delta = hole ? circle_hole_correction(params, unscale<double>(diameter)) :
+                                    circle_contour_correction(params, unscale<double>(diameter));
+        if (delta != 0. && change_circle_radius(polygon, center, diameter / 2., scale_(delta))) {
+            handled.push_back({ center, diameter + 2. * scale_(delta), hole });
             changed = true;
-    }
-    for (Polygon &hole : compensated.holes) {
-        if (is_approx_circle(hole, center, diameter) && diameter <= diameter_limit &&
-            is_outline_circle(outline, center, diameter, true)) {
-            const double delta = circle_hole_correction(params, unscale<double>(diameter));
-            if (delta != 0. && change_circle_radius(hole, center, diameter / 2., scale_(delta)))
-                changed = true;
+        } else {
+            handled.push_back(original.back());
         }
-    }
+    };
+    compensate(compensated.contour, false);
+    for (Polygon &hole : compensated.holes)
+        compensate(hole, true);
 
-    if (!changed || !keeps_topology(expolygon, compensated))
-        return expolygon;
-    return compensated;
+    const bool keep = changed && keeps_topology(expolygon, compensated);
+    if (compensated_circles != nullptr)
+        append(*compensated_circles, keep || !changed ? std::move(handled) : std::move(original));
+    return keep ? compensated : expolygon;
+}
+
+CircleBoundaries find_compensated_circles(const ExPolygon &expolygon, const CircleBoundaries &compensated)
+{
+    CircleBoundaries found;
+    if (compensated.empty())
+        return found;
+    Point  center;
+    double diameter = 0.;
+    auto   find = [&](const Polygon &polygon, bool hole) {
+        if (is_approx_circle(polygon, center, diameter) && matches_circle(compensated, center, diameter, hole, compensated_diameter_tolerance))
+            found.push_back({ center, diameter, hole });
+    };
+    find(expolygon.contour, false);
+    for (const Polygon &hole : expolygon.holes)
+        find(hole, true);
+    return found;
+}
+
+bool is_compensated_loop(const Polygon &loop, bool hole, const CircleBoundaries &circles)
+{
+    if (circles.empty() || loop.points.size() < 3 || std::abs(loop.area()) < 1.)
+        return false;
+    const Point center = loop.centroid();
+    return std::any_of(circles.begin(), circles.end(), [&](const CircleBoundary &circle) {
+        return circle.hole == hole && (circle.center - center).cast<double>().norm() <= boundary_center_tolerance;
+    });
 }
 
 } // namespace Slic3r

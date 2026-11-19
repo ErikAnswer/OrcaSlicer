@@ -472,6 +472,8 @@ public:
     // nothing to lean on until this layer is bridged, so the G-code writer holds it back until the
     // infill is down. See defer_unsupported_loops() in PerimeterGenerator.cpp.
     bool print_after_infill = false;
+    // Wall of a circle handled by the circle compensation: printed at circle_compensation_speed.
+    bool circle_compensation = false;
 
     ExtrusionLoop(ExtrusionLoopRole role = elrDefault) : m_loop_role(role) {}
     ExtrusionLoop(const ExtrusionPaths &paths, ExtrusionLoopRole role = elrDefault) : paths(paths), m_loop_role(role) {}
