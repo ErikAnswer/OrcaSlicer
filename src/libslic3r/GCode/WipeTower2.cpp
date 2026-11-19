@@ -1166,7 +1166,6 @@ void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, floa
     };
     std::vector<Move>  moves;
     std::vector<float> inherited_feedrate(lines.size(), 0.f);
-    float              print_feedrate   = 0.f;
     float              running_feedrate = 0.f;
     Vec2f              position         = start_pos;
     for (size_t idx = 0; idx < lines.size(); ++idx) {
@@ -1192,16 +1191,14 @@ void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, floa
             running_feedrate = f;
         else
             inherited_feedrate[idx] = running_feedrate;
-        if (has_f && (is_motion || (!has_e && !has_x && !has_y)))
-            print_feedrate = f;
 
         const Vec2f from = position;
         if (has_x)
             position.x() = x;
         if (has_y)
             position.y() = y;
-        if (has_e && e > 0.f && is_motion && print_feedrate > 0.f)
-            moves.push_back({idx, e, print_feedrate, !is_arc && is_splittable_tower_move(line, lines[idx]), from, position});
+        if (has_e && e > 0.f && is_motion && running_feedrate > 0.f)
+            moves.push_back({idx, e, running_feedrate, !is_arc && is_splittable_tower_move(line, lines[idx]), from, position});
     }
     if (moves.empty())
         return;

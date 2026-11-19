@@ -1199,6 +1199,15 @@ TEST_CASE("The prime tower tail slowdown slows every extrusion of the visit with
                    "G1 X0 Y10 F2000\n");
 }
 
+TEST_CASE("The prime tower tail slowdown slows a move from the feedrate a retraction left", "[WipeTower]")
+{
+    std::string gcode = "G1 X10 Y0 F600\nG1 E-0.8 F2400\nG1 X20 Y0 E1\n";
+    WipeTower2::apply_tail_slowdown(gcode, 0.f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    CHECK(gcode == "G1 X10 Y0 F600\n"
+                   "G1 E-0.8 F2400\n"
+                   "G1 X20 Y0 E1 F1200\n");
+}
+
 TEST_CASE("The prime tower tail slowdown restarts from the tool change position after the placeholder", "[WipeTower]")
 {
     std::string gcode = "G1 X50 Y50 F9000\n[change_filament_gcode]\nG1 X15 Y5 E1 F3000\n";
