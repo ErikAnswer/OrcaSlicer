@@ -71,6 +71,14 @@ public:
     // (the last factor repeats), or the built-in ramp when the curve is empty.
     static float purge_line_speed(const std::vector<float>& curve, int line, float previous_speed, float target_speed);
 
+    // Slows the last `tail_volume` mm3 extruded in one tower visit down to `speed_factor` of its feedrate
+    // (the whole visit when `tail_volume` <= 0), splitting the linear move that crosses the limit. Positions
+    // are tracked like WipeTowerIntegration::post_process_wipe_tower_moves(): from `start_pos`, reset to
+    // `tool_change_start_pos` by the filament change placeholder. Moves after the slowed tail that relied on
+    // the previous feedrate get it back explicitly. Expects relative E, as the tower writer emits.
+    static void apply_tail_slowdown(std::string& gcode, float tail_volume, float speed_factor, float filament_area,
+                                    const Vec2f& start_pos, const Vec2f& tool_change_start_pos);
+
 	// x			-- x coordinates of wipe tower in mm ( left bottom corner )
 	// y			-- y coordinates of wipe tower in mm ( left bottom corner )
 	// width		-- width of wipe tower in mm ( default 60 mm - leave as it is )
@@ -258,6 +266,8 @@ private:
     float  m_travel_speed       = 0.f;
 	float  m_infill_speed       = 0.f;
     float  m_wipe_tower_max_purge_speed   = 90.f;
+    float  m_tail_speed_factor          = 1.f;  // prime_tower_tail_speed_factor as a ratio.
+    float  m_tail_slowdown_volume       = 10.f; // prime_tower_tail_slowdown_volume in mm3; 0 = whole visit.
 	float  m_perimeter_speed    = 0.f;
     float  m_first_layer_speed  = 0.f;
     size_t m_first_layer_idx    = size_t(-1);

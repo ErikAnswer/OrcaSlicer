@@ -1360,3 +1360,208 @@ TEST_CASE("The Type 2 tower prints its toolchange wipes at the speed factor curv
     }
     CHECK(whole_ramps > 0);
 }
+
+TEST_CASE("The prime tower tail slowdown leaves a visit alone at full speed", "[WipeTower]")
+{
+    const std::string visit = "G1 X10 Y0 E1 F3000\nG1 X20 Y0 E1\n";
+    std::string gcode = visit;
+    WipeTower2::apply_tail_slowdown(gcode, 10.f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    CHECK(gcode == visit);
+}
+
+TEST_CASE("The prime tower tail slowdown splits the move that crosses the tail volume", "[WipeTower]")
+{
+    std::string gcode = "G1 X10 Y0 E1 F3000\nG1 X20 Y0 E1\nG1 E-0.8\nG1 X30 Y5\n";
+    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    CHECK(gcode == "G1 X10 Y0 E1 F3000\n"
+                   "G1 X15.000 Y0.000 E0.50000\n"
+                   "G1 X20.000 Y0.000 E0.50000 F1500\n"
+                   "G1 E-0.8 F3000\n"
+                   "G1 X30 Y5 F3000\n");
+}
+
+TEST_CASE("The prime tower tail slowdown slows every extrusion of the visit with a zero volume", "[WipeTower]")
+{
+    std::string gcode = "G1 X10 Y0 F9000\nG1 X20 Y0 E1 F3000\nG1 X20 Y10 E1 F2000 ; wall\nG1 X0 Y10\n";
+    WipeTower2::apply_tail_slowdown(gcode, 0.f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    CHECK(gcode == "G1 X10 Y0 F9000\n"
+                   "G1 X20 Y0 E1 F1500\n"
+                   "G1 X20 Y10 E1 F1000 ; wall\n"
+                   "G1 X0 Y10 F2000\n");
+}
+
+TEST_CASE("The prime tower tail slowdown slows a move from the feedrate a retraction left", "[WipeTower]")
+{
+    std::string gcode = "G1 X10 Y0 F600\nG1 E-0.8 F2400\nG1 X20 Y0 E1\n";
+    WipeTower2::apply_tail_slowdown(gcode, 0.f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    CHECK(gcode == "G1 X10 Y0 F600\n"
+                   "G1 E-0.8 F2400\n"
+                   "G1 X20 Y0 E1 F1200\n");
+}
+
+TEST_CASE("The prime tower tail slowdown restarts from the tool change position after the placeholder", "[WipeTower]")
+{
+    std::string gcode = "G1 X50 Y50 F9000\n[change_filament_gcode]\nG1 X15 Y5 E1 F3000\n";
+    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, Vec2f::Zero(), Vec2f(5.f, 5.f));
+    CHECK(gcode == "G1 X50 Y50 F9000\n"
+                   "[change_filament_gcode]\n"
+                   "G1 X10.000 Y5.000 E0.50000 F3000\n"
+                   "G1 X15.000 Y5.000 E0.50000 F1500\n");
+}
+
+TEST_CASE("The prime tower tail slowdown never writes a split point that prints as one of the move's ends", "[WipeTower]")
+{
+    SECTION("tail too short") {
+        const std::string visit = "G1 X10 Y0 E1 F3000\n";
+        std::string gcode = visit;
+        WipeTower2::apply_tail_slowdown(gcode, 0.00001f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+        CHECK(gcode == visit);
+    }
+    SECTION("head too short") {
+        std::string gcode = "G1 X10 Y0 E1 F3000\n";
+        WipeTower2::apply_tail_slowdown(gcode, 0.99996f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+        CHECK(gcode == "G1 X10 Y0 E1 F1500\n");
+    }
+}
+
+// Per wipe tower region of a slice, its G1 moves as (extrudes, effective feedrate, x, y), with the
+// region's layer Z. Feedrates carry over from earlier lines, like the printer reads them.
+struct TowerMove { bool extrudes; double e; double f; double x; double y; };
+struct TowerRegion { double z; std::vector<TowerMove> moves; };
+static std::vector<TowerRegion> tower_region_moves(const std::string &gcode)
+{
+    const std::string start_tag = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Wipe_Tower_Start);
+    const std::string end_tag   = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Wipe_Tower_End);
+    std::vector<TowerRegion> regions;
+    bool   inside = false;
+    double z = 0., f = 0., x = 0., y = 0.;
+    std::istringstream lines(gcode);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.rfind(";Z:", 0) == 0)
+            z = string_to_double_decimal_point(std::string_view(line).substr(3));
+        if (line.rfind(start_tag, 0) == 0) {
+            inside = true;
+            regions.push_back({ z, {} });
+            continue;
+        }
+        if (line.rfind(end_tag, 0) == 0)
+            inside = false;
+        if (line.rfind("G1", 0) != 0 && line.rfind("G0", 0) != 0)
+            continue;
+        std::istringstream tokens(line.substr(0, line.find(';')));
+        bool   moves = false;
+        double e = 0.;
+        for (std::string token; tokens >> token;) {
+            const double value = token.size() > 1 ? string_to_double_decimal_point(std::string_view(token).substr(1)) : 0.;
+            switch (token[0]) {
+            case 'X': x = value; moves = true; break;
+            case 'Y': y = value; moves = true; break;
+            case 'E': e = value; break;
+            case 'F': f = value; break;
+            default: break;
+            }
+        }
+        if (inside && moves)
+            regions.back().moves.push_back({ e > 0., e, f, x, y });
+    }
+    return regions;
+}
+
+static double tower_first_layer_z(const std::vector<TowerRegion> &regions)
+{
+    double z = std::numeric_limits<double>::max();
+    for (const TowerRegion &region : regions)
+        if (region.z > 0.)
+            z = std::min(z, region.z);
+    return z;
+}
+
+static std::vector<TowerRegion> sliced_tower_regions(double tail_speed_factor, double tail_volume)
+{
+    DynamicPrintConfig config = wipe_tower_toolchange_config("marlin");
+    config.set_deserialize_strict({ { "wipe_tower_type", "type2" },
+                                    { "prime_tower_tail_speed_factor", std::to_string(int(tail_speed_factor)) + "%" },
+                                    { "prime_tower_tail_slowdown_volume", float_to_string_decimal_point(tail_volume) } });
+    const std::string gcode = slice_with_prime_tower(config);
+    CHECK_THAT(wipe_tower_regions(gcode), !Catch::Matchers::ContainsSubstring("\nG1 Y"));
+    return tower_region_moves(gcode);
+}
+
+TEST_CASE("The Type 2 tower slows every extrusion of each visit but the first layer's with a zero tail volume", "[WipeTower]")
+{
+    const std::vector<TowerRegion> full = sliced_tower_regions(100., 0.);
+    const std::vector<TowerRegion> slow = sliced_tower_regions(50., 0.);
+    REQUIRE(full.size() > 2);
+    REQUIRE(slow.size() == full.size());
+    const double first_layer_z = tower_first_layer_z(full);
+    size_t slowed_regions = 0;
+    for (size_t r = 0; r < full.size(); ++r) {
+        REQUIRE(slow[r].moves.size() == full[r].moves.size());
+        const bool first_layer = full[r].z <= first_layer_z + 1e-6;
+        for (size_t m = 0; m < full[r].moves.size(); ++m) {
+            const TowerMove &before = full[r].moves[m];
+            const TowerMove &after  = slow[r].moves[m];
+            const double expected = before.extrudes && ! first_layer ? 0.5 * before.f : before.f;
+            CHECK_THAT(after.f, Catch::Matchers::WithinAbs(expected, 1.));
+        }
+        slowed_regions += ! first_layer;
+    }
+    CHECK(slowed_regions > 0);
+}
+
+TEST_CASE("The Type 2 tower slows only the last extruded volume of each visit and stays on the tower", "[WipeTower]")
+{
+    const double tail_volume = 1.;
+    const std::vector<TowerRegion> full = sliced_tower_regions(100., 0.);
+    const std::vector<TowerRegion> slow = sliced_tower_regions(50., tail_volume);
+    REQUIRE(slow.size() == full.size());
+    const double filament_area = M_PI / 4. * 1.75 * 1.75;
+    const double first_layer_z = tower_first_layer_z(full);
+    size_t checked_tails = 0;
+    for (size_t r = 0; r < full.size(); ++r) {
+        if (full[r].z <= first_layer_z + 1e-6)
+            continue;
+        double min_x = 1e9, min_y = 1e9, max_x = -1e9, max_y = -1e9, full_e = 0.;
+        for (const TowerMove &move : full[r].moves) {
+            min_x = std::min(min_x, move.x); max_x = std::max(max_x, move.x);
+            min_y = std::min(min_y, move.y); max_y = std::max(max_y, move.y);
+            full_e += move.extrudes ? move.e : 0.;
+        }
+        double slow_e = 0., slowed_e = 0.;
+        size_t splits = 0;
+        bool   in_tail = false;
+        for (size_t i = 0, j = 0; j < slow[r].moves.size(); ++j) {
+            REQUIRE(i < full[r].moves.size());
+            const TowerMove &before = full[r].moves[i];
+            const TowerMove &after  = slow[r].moves[j];
+            CHECK(after.x >= min_x - 0.002);
+            CHECK(after.x <= max_x + 0.002);
+            CHECK(after.y >= min_y - 0.002);
+            CHECK(after.y <= max_y + 0.002);
+            slow_e += after.extrudes ? after.e : 0.;
+            const bool split_head = std::abs(after.x - before.x) > 0.0015 || std::abs(after.y - before.y) > 0.0015;
+            if (split_head) {
+                REQUIRE(before.extrudes);
+                REQUIRE(after.extrudes);
+                CHECK_THAT(after.f, Catch::Matchers::WithinAbs(before.f, 1.));
+                ++splits;
+                continue;
+            }
+            if (after.extrudes && std::abs(after.f - 0.5 * before.f) <= 1.) {
+                slowed_e += after.e;
+                in_tail = true;
+            } else {
+                CHECK_THAT(after.f, Catch::Matchers::WithinAbs(before.f, 1.));
+                CHECK_FALSE((in_tail && after.extrudes));
+            }
+            ++i;
+        }
+        CHECK(splits <= 1);
+        CHECK_THAT(slow_e, Catch::Matchers::WithinAbs(full_e, 1e-3));
+        if (full_e * filament_area > tail_volume + 0.01) {
+            CHECK_THAT(slowed_e * filament_area, Catch::Matchers::WithinAbs(tail_volume, 0.01));
+            ++checked_tails;
+        }
+    }
+    CHECK(checked_tails > 0);
+}
