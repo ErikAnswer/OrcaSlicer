@@ -3312,6 +3312,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("initial_layer_travel_acceleration", "speed_settings_acceleration#initial-layer-travel", 0);
         optgroup->append_single_option_line("top_surface_acceleration", "speed_settings_acceleration#top-surface", 0);
         optgroup->append_single_option_line("travel_acceleration", "speed_settings_acceleration#travel", 0);
+        optgroup->append_single_option_line("travel_short_distance_acceleration", "speed_settings_acceleration", 0);
         optgroup->append_single_option_line("accel_to_decel_enable", "speed_settings_acceleration#enable-accel-to-decel");
         optgroup->append_single_option_line("accel_to_decel_factor", "speed_settings_acceleration#accel-to-decel");
 
@@ -5027,6 +5028,7 @@ void TabFilament::build()
         optgroup->append_single_option_line("reduce_fan_stop_start_freq", "material_cooling#keep-fan-always-on");
         optgroup->append_single_option_line("slow_down_for_layer_cooling", "material_cooling#slow-printing-down-for-better-layer-cooling");
         optgroup->append_single_option_line("dont_slow_down_outer_wall", "material_cooling#dont-slow-down-outer-walls");
+        optgroup->append_single_option_line("cooling_slowdown_logic", "material_cooling");
         optgroup->append_single_option_line("slow_down_min_speed", "material_cooling#min-print-speed");
 
         optgroup->append_single_option_line("enable_overhang_bridge_fan", "material_cooling#force-cooling-for-overhangs-and-bridges");
@@ -5241,6 +5243,7 @@ void TabFilament::toggle_options()
         // Orca: toggle dont slow down for external perimeters if
         bool has_slow_down_for_layer_cooling = m_config->opt_bool("slow_down_for_layer_cooling", 0);
         toggle_option("dont_slow_down_outer_wall", has_slow_down_for_layer_cooling, -1, _L("Enable slowing down for layer cooling to use this setting."));
+        toggle_option("cooling_slowdown_logic", has_slow_down_for_layer_cooling, -1, _L("Enable slowing down for layer cooling to use this setting."));
 
         // ORCA: First layer fan speed override only makes sense when no layers are gated off ("No cooling for
         // the first" == 0). Otherwise the override would set layer 0 to a non-zero value while the gate forces

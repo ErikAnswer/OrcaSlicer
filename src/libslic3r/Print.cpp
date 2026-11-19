@@ -310,6 +310,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "filament_flow_ratio",
         "reduce_fan_stop_start_freq",
         "dont_slow_down_outer_wall",
+        "cooling_slowdown_logic",
         "fan_cooling_layer_time",
         "full_fan_speed_layer",
         "initial_layer_fan_speed",
@@ -330,6 +331,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "top_surface_acceleration",
         "bridge_acceleration",
         "travel_acceleration",
+        "travel_short_distance_acceleration",
         "sparse_infill_acceleration",
         "internal_solid_infill_acceleration",
         // BBS

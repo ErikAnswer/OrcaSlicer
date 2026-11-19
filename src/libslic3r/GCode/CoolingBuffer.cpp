@@ -203,16 +203,20 @@ struct PerExtruderAdjustments
         return time_total;
     }
 
+    // Outer walls count as adjustable unless the consistent surface logic is holding them at their speed.
+    bool slowdown_external_perimeters() const { return ! hold_external_perimeters; }
+
     // Sort the lines, adjustable first, higher feedrate first.
     // Used by non-proportional slow down.
     void sort_lines_by_decreasing_feedrate() {
-        std::sort(lines.begin(), lines.end(), [](const CoolingLine &l1, const CoolingLine &l2) {
-            bool adj1 = l1.adjustable();
-            bool adj2 = l2.adjustable();
+        const bool slowdown_external = this->slowdown_external_perimeters();
+        std::sort(lines.begin(), lines.end(), [slowdown_external](const CoolingLine &l1, const CoolingLine &l2) {
+            bool adj1 = l1.adjustable(slowdown_external);
+            bool adj2 = l2.adjustable(slowdown_external);
             return (adj1 == adj2) ? l1.feedrate > l2.feedrate : adj1;
         });
         for (n_lines_adjustable = 0;
-            n_lines_adjustable < lines.size() && this->lines[n_lines_adjustable].adjustable();
+            n_lines_adjustable < lines.size() && this->lines[n_lines_adjustable].adjustable(slowdown_external);
             ++ n_lines_adjustable);
         time_non_adjustable = 0.f;
         for (size_t i = n_lines_adjustable; i < lines.size(); ++ i)
@@ -261,6 +265,10 @@ struct PerExtruderAdjustments
     float                       slow_down_min_speed     = 0.f;
     
     bool                        dont_slow_down_outer_wall = false;
+    // Slow down the other features before the outer walls (cooling_slowdown_logic = consistent_surface).
+    bool                        consistent_surface = false;
+    // Set while the consistent surface logic keeps the outer walls out of the slow down.
+    bool                        hold_external_perimeters = false;
 
 
     // Parsed lines.
@@ -372,6 +380,7 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
         adj.slow_down_min_speed           = float(m_config.slow_down_min_speed.get_at(extruder_id));
         // ORCA: To enable dont slow down external perimeters feature per filament (extruder)
         adj.dont_slow_down_outer_wall   = m_config.dont_slow_down_outer_wall.get_at(extruder_id);
+        adj.consistent_surface          = m_config.cooling_slowdown_logic.get_at(extruder_id) == cslConsistentSurface;
         map_extruder_to_per_extruder_adjustment[extruder_id] = i;
     }
 
@@ -626,10 +635,10 @@ static inline void extruder_range_slow_down_non_proportional(
                 // and the minimum speed is set to zero.
                 float time_adjustable = 0.f;
                 for (auto it = adj; it != by_min_print_speed.end(); ++ it)
-                    time_adjustable += (*it)->adjustable_time(true);
+                    time_adjustable += (*it)->adjustable_time((*it)->slowdown_external_perimeters());
                 float rate = (time_adjustable + time_stretch) / time_adjustable;
                 for (auto it = adj; it != by_min_print_speed.end(); ++ it)
-                    (*it)->slow_down_proportional(rate, true);
+                    (*it)->slow_down_proportional(rate, (*it)->slowdown_external_perimeters());
                 return;
             } else {
                 float feedrate_limit = std::max(feedrate_next, (*adj)->slow_down_min_speed);
@@ -660,6 +669,49 @@ static inline void extruder_range_slow_down_non_proportional(
             feedrate = feedrate_next;
         }
     }
+}
+
+// Slow down an extruder range to slow_down_layer_time, keeping the outer walls of the extruders using the
+// consistent surface logic at their speed while the other features can absorb the whole time stretch.
+// Only when they cannot, those features are slowed down to their minimum speed and the outer walls take the rest.
+static inline void extruder_range_slow_down_consistent_surface(
+    std::vector<PerExtruderAdjustments*>::iterator it_begin,
+    std::vector<PerExtruderAdjustments*>::iterator it_end,
+    float elapsed_time_total0,
+    float slow_down_layer_time)
+{
+    const auto range_time = [&](const auto &time_of) {
+        float time = elapsed_time_total0;
+        for (auto it = it_begin; it != it_end; ++ it)
+            time += time_of(**it);
+        return time;
+    };
+    const auto set_hold_external_perimeters = [&](bool hold) {
+        for (auto it = it_begin; it != it_end; ++ it) {
+            (*it)->hold_external_perimeters = hold && (*it)->consistent_surface;
+            (*it)->sort_lines_by_decreasing_feedrate();
+        }
+    };
+    const auto elapsed_time = [](const PerExtruderAdjustments &adj) { return adj.elapsed_time_total(); };
+
+    set_hold_external_perimeters(true);
+    const float time_holding_external = range_time([](const PerExtruderAdjustments &adj) {
+        return adj.maximum_time_after_slowdown(adj.slowdown_external_perimeters());
+    });
+    if (time_holding_external > slow_down_layer_time) {
+        extruder_range_slow_down_non_proportional(it_begin, it_end, slow_down_layer_time - range_time(elapsed_time));
+        set_hold_external_perimeters(false);
+        return;
+    }
+    for (auto it = it_begin; it != it_end; ++ it)
+        (*it)->slowdown_to_minimum_feedrate((*it)->slowdown_external_perimeters());
+    set_hold_external_perimeters(false);
+    const float time_stretch = slow_down_layer_time - range_time(elapsed_time);
+    bool any_adjustable = false;
+    for (auto it = it_begin; it != it_end; ++ it)
+        any_adjustable |= (*it)->n_lines_adjustable > 0;
+    if (time_stretch > 0.f && any_adjustable)
+        extruder_range_slow_down_non_proportional(it_begin, it_end, time_stretch);
 }
 
 // Calculate slow down for all the extruders.
@@ -706,7 +758,12 @@ float CoolingBuffer::calculate_layer_slowdown(std::vector<PerExtruderAdjustments
             for (auto it = cur_begin; it != by_slowdown_time.end(); ++ it)
                 max_time += (*it)->time_maximum;
             if (max_time > slow_down_layer_time) {
-                extruder_range_slow_down_non_proportional(cur_begin, by_slowdown_time.end(), slow_down_layer_time - total);
+                const bool consistent_surface = std::any_of(cur_begin, by_slowdown_time.end(),
+                    [](const PerExtruderAdjustments *adj) { return adj->consistent_surface; });
+                if (consistent_surface)
+                    extruder_range_slow_down_consistent_surface(cur_begin, by_slowdown_time.end(), elapsed_time_total0, slow_down_layer_time);
+                else
+                    extruder_range_slow_down_non_proportional(cur_begin, by_slowdown_time.end(), slow_down_layer_time - total);
             } else {
                 // Slow down to maximum possible.
                 for (auto it = cur_begin; it != by_slowdown_time.end(); ++ it)
