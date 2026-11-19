@@ -602,6 +602,12 @@ static const t_config_enum_values s_keys_map_OverhangFanThreshold = {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(OverhangFanThreshold)
 
+static const t_config_enum_values s_keys_map_CoolingSlowdownLogicType = {
+    { "uniform_cooling",    cslUniformCooling },
+    { "consistent_surface", cslConsistentSurface },
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(CoolingSlowdownLogicType)
+
 // BBS
 static const t_config_enum_values s_keys_map_BedType = {
     { "Default Plate",      btDefault },
@@ -2326,6 +2332,20 @@ void PrintConfigDef::init_fff_params()
     def->nullable = true;
     def->set_default_value(new ConfigOptionFloatsNullable{10000.0});
 
+    def           = this->add("travel_short_distance_acceleration", coFloats);
+    def->label = L("Short travel");
+    def->category = L("Speed");
+    def->tooltip = L("Acceleration of short travel moves that lead to an outer wall or overhang wall. A travel is short "
+                     "when it is shorter than the retraction \"Travel distance threshold\". A low value reduces ringing next "
+                     "to the outer wall without making the print noticeably slower.\n\n"
+                     "Set to 0 to keep the current behavior: those travels use the outer wall acceleration (bridge acceleration "
+                     "for overhang walls).");
+    def->sidetext = L(u8"mm/s²");	// millimeters per second per second, CIS languages need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsNullable{0.0});
+
     def = this->add("initial_layer_travel_acceleration", coFloatsOrPercents);
     def->label = L("First layer travel");
     def->tooltip = L("Travel acceleration of first layer.\nThe percentage value is relative to Travel Acceleration.");
@@ -3040,6 +3060,22 @@ void PrintConfigDef::init_fff_params()
                      "2. To avoid changes in external wall speed which may create slight wall artifacts that appear like Z banding\n"
                      "3. To avoid printing at speeds which cause VFAs (fine artifacts) on the external walls");
     def->set_default_value(new ConfigOptionBools { false });
+
+    def = this->add("cooling_slowdown_logic", coEnums);
+    def->label = L("Slowdown logic");
+    def->tooltip = L("How the print is slowed down when a layer is printed faster than the layer time threshold.\n\n"
+                     "Uniform cooling: all features are slowed down together, outer walls included.\n\n"
+                     "Consistent surface: infill, inner walls and the other features are slowed down first, and outer walls keep "
+                     "their speed. Outer walls are only slowed down when the rest of the layer cannot reach the layer time "
+                     "threshold on its own. This keeps the outer wall speed constant between layers, which avoids changes "
+                     "in shine and banding on small layers.");
+    def->enum_keys_map = &ConfigOptionEnum<CoolingSlowdownLogicType>::get_enum_values();
+    def->enum_values.emplace_back("uniform_cooling");
+    def->enum_values.emplace_back("consistent_surface");
+    def->enum_labels.emplace_back(L("Uniform cooling"));
+    def->enum_labels.emplace_back(L("Consistent surface"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnumsGeneric{ (int)cslUniformCooling });
 
     def = this->add("fan_cooling_layer_time", coFloats);
     def->label = L("Layer time");
@@ -10337,6 +10373,7 @@ std::set<std::string> print_options_with_variant = {
     "default_acceleration",
     "bridge_acceleration",
     "travel_acceleration",
+    "travel_short_distance_acceleration",
     "initial_layer_travel_acceleration",
     "initial_layer_acceleration",
     "outer_wall_acceleration",

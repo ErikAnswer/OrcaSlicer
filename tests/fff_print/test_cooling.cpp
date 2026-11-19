@@ -4,7 +4,9 @@
 #include "test_helpers.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <limits>
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/TriangleMesh.hpp"
@@ -157,4 +159,149 @@ TEST_CASE("Overhang fan transitions do not depend on overhang speed", "[Cooling]
                         [](const auto &command) { return command.second.find("S255") != std::string::npos; }));
     REQUIRE(with_speed_feedrates != without_speed_feedrates);
     CHECK(with_speed_fan == without_speed_fan);
+}
+
+namespace {
+
+DynamicPrintConfig layer_time_bound_config(CoolingSlowdownLogicType logic)
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "enable_arc_fitting",          "disabled" },
+        { "enable_overhang_speed",       false },
+        { "initial_layer_print_height",  0.2 },
+        { "layer_height",                0.2 },
+        { "outer_wall_speed",            60.0 },
+        { "inner_wall_speed",            120.0 },
+        { "sparse_infill_speed",         200.0 },
+        { "internal_solid_infill_speed", 200.0 },
+        { "top_surface_speed",           200.0 },
+        { "small_perimeter_threshold",   0.0 },
+    });
+    config.set_key_value("slow_down_for_layer_cooling", new ConfigOptionBools{true});
+    config.set_key_value("dont_slow_down_outer_wall", new ConfigOptionBools{false});
+    config.set_key_value("slow_down_layer_time", new ConfigOptionFloats{12.0});
+    config.set_key_value("slow_down_min_speed", new ConfigOptionFloats{5.0});
+    config.set_key_value("cooling_slowdown_logic", new ConfigOptionEnumsGeneric{(int)logic});
+    config.set_key_value("layer_change_gcode", new ConfigOptionString{";TEST_LAYER=[layer_num]"});
+    return config;
+}
+
+struct FeatureFeedrates
+{
+    std::vector<double> outer_wall;
+    std::vector<double> other;
+};
+
+FeatureFeedrates extrusion_feedrates_in_layers(const std::string &gcode, size_t first_layer, size_t last_layer)
+{
+    FeatureFeedrates out;
+    std::istringstream input(gcode);
+    std::string line;
+    size_t layers_seen = 0;
+    bool outer_wall = false;
+    double feedrate = 0.;
+    while (std::getline(input, line)) {
+        if (line.rfind(";TEST_LAYER=", 0) == 0) {
+            ++layers_seen;
+            continue;
+        }
+        if (line.rfind(";TYPE:", 0) == 0) {
+            outer_wall = line == ";TYPE:Outer wall";
+            continue;
+        }
+        if (line.rfind("G1 ", 0) != 0)
+            continue;
+        std::istringstream words(line.substr(0, line.find(';')));
+        std::string word;
+        bool extrudes = false;
+        bool moves_xy = false;
+        while (words >> word) {
+            if (word.front() == 'F')
+                feedrate = std::stod(word.substr(1));
+            else if (word.front() == 'E' && std::stod(word.substr(1)) > 0.)
+                extrudes = true;
+            else if (word.front() == 'X' || word.front() == 'Y')
+                moves_xy = true;
+        }
+        if (extrudes && moves_xy && layers_seen >= first_layer && layers_seen <= last_layer)
+            (outer_wall ? out.outer_wall : out.other).push_back(feedrate);
+    }
+    return out;
+}
+
+FeatureFeedrates extrusion_feedrates_after_first_layers(const std::string &gcode)
+{
+    return extrusion_feedrates_in_layers(gcode, 3, std::numeric_limits<size_t>::max());
+}
+
+} // namespace
+
+TEST_CASE("Consistent surface slowdown keeps the outer wall speed", "[Cooling]")
+{
+    const double outer_wall_feedrate = 60.0 * 60.0;
+    const auto max_of = [](const std::vector<double> &values) { return *std::max_element(values.begin(), values.end()); };
+
+    const FeatureFeedrates uniform = extrusion_feedrates_after_first_layers(
+        slice({ cube(10) }, layer_time_bound_config(cslUniformCooling)));
+    const FeatureFeedrates consistent = extrusion_feedrates_after_first_layers(
+        slice({ cube(10) }, layer_time_bound_config(cslConsistentSurface)));
+
+    REQUIRE_FALSE(uniform.outer_wall.empty());
+    REQUIRE_FALSE(consistent.outer_wall.empty());
+    REQUIRE_FALSE(consistent.other.empty());
+
+    CHECK(std::any_of(uniform.outer_wall.begin(), uniform.outer_wall.end(),
+                      [&](double f) { return f < outer_wall_feedrate - 1.; }));
+    CHECK(std::all_of(consistent.outer_wall.begin(), consistent.outer_wall.end(),
+                      [&](double f) { return std::abs(f - outer_wall_feedrate) < 1.; }));
+    CHECK(max_of(consistent.other) < max_of(uniform.other) + 1.);
+    CHECK(max_of(consistent.other) < 120.0 * 60.0 - 1.);
+}
+
+TEST_CASE("Consistent surface slows the outer wall once nothing else is left", "[Cooling]")
+{
+    // Hollow 10 mm cube with two walls: a middle layer is about 40 mm of outer wall and 38 mm of inner wall.
+    // At the 10 mm/s minimum, the inner wall alone gives about 4.5 s with the outer wall at speed and the
+    // whole layer about 7.8 s, so a 6 s threshold needs the second pass: the inner wall goes to its minimum
+    // and the outer wall is slowed down, but not to its minimum.
+    DynamicPrintConfig config = layer_time_bound_config(cslConsistentSurface);
+    config.set_deserialize_strict({
+        { "wall_loops",            2 },
+        { "sparse_infill_density", "0%" },
+    });
+    config.set_key_value("slow_down_layer_time", new ConfigOptionFloats{6.0});
+    config.set_key_value("slow_down_min_speed", new ConfigOptionFloats{10.0});
+    const double min_feedrate        = 10.0 * 60.0;
+    const double outer_wall_feedrate = 60.0 * 60.0;
+
+    const FeatureFeedrates middle = extrusion_feedrates_in_layers(slice({ cube(10) }, config), 15, 35);
+
+    REQUIRE_FALSE(middle.outer_wall.empty());
+    REQUIRE_FALSE(middle.other.empty());
+    CHECK(std::all_of(middle.other.begin(), middle.other.end(),
+                      [&](double f) { return std::abs(f - min_feedrate) < 1.; }));
+    CHECK(std::all_of(middle.outer_wall.begin(), middle.outer_wall.end(),
+                      [&](double f) { return f > min_feedrate + 1. && f < outer_wall_feedrate - 1.; }));
+}
+
+TEST_CASE("Short travel acceleration next to outer walls", "[Cooling][GCode]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "gcode_flavor",         "klipper" },
+        { "layer_height",         0.2 },
+        { "wall_sequence",        "inner wall/outer wall" },
+    });
+    config.set_key_value("default_acceleration", new ConfigOptionFloatsNullable{5000.0});
+    config.set_key_value("outer_wall_acceleration", new ConfigOptionFloatsNullable{3000.0});
+    config.set_key_value("travel_acceleration", new ConfigOptionFloatsNullable{6000.0});
+
+    config.set_key_value("travel_short_distance_acceleration", new ConfigOptionFloatsNullable{0.0});
+    const std::string disabled = slice({ cube(20) }, config);
+    config.set_key_value("travel_short_distance_acceleration", new ConfigOptionFloatsNullable{1234.0});
+    const std::string enabled = slice({ cube(20) }, config);
+
+    CHECK(disabled.find("ACCEL=1234") == std::string::npos);
+    CHECK(enabled.find("ACCEL=1234") != std::string::npos);
 }

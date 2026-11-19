@@ -494,6 +494,11 @@ enum class ToolChangeOrderingType
     Cyclic,
 };
 
+enum CoolingSlowdownLogicType {
+    cslUniformCooling = 0,
+    cslConsistentSurface,
+};
+
 // BBS
 enum OverhangFanThreshold {
     Overhang_threshold_none = 0,
@@ -1419,6 +1424,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatsNullable,           initial_layer_acceleration))
     ((ConfigOptionFloatsOrPercentsNullable, bridge_acceleration))
     ((ConfigOptionFloatsNullable,           travel_acceleration))
+    ((ConfigOptionFloatsNullable,           travel_short_distance_acceleration))
     ((ConfigOptionFloatsOrPercentsNullable, sparse_infill_acceleration))
     ((ConfigOptionFloatsOrPercentsNullable, internal_solid_infill_acceleration))
 
@@ -2053,6 +2059,7 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionPoints,             extruder_offset))
     ((ConfigOptionBools,              reduce_fan_stop_start_freq))
     ((ConfigOptionBools,              dont_slow_down_outer_wall))
+    ((ConfigOptionEnumsGeneric,       cooling_slowdown_logic))
     ((ConfigOptionFloats,             fan_cooling_layer_time))
     ((ConfigOptionBools,              activate_air_filtration))
     ((ConfigOptionBools,              activate_air_filtration_during_print))

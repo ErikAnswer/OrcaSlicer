@@ -38269,3 +38269,37 @@ msgstr "Activa la compensación automática de agujeros y contornos circulares p
 
 msgid "Circle compensation"
 msgstr "Compensación de círculos"
+
+msgid "Slowdown logic"
+msgstr "Lógica de ralentización"
+
+msgid ""
+"How the print is slowed down when a layer is printed faster than the layer time threshold.\n"
+"\n"
+"Uniform cooling: all features are slowed down together, outer walls included.\n"
+"\n"
+"Consistent surface: infill, inner walls and the other features are slowed down first, and outer walls keep their speed. Outer walls are only slowed down when the rest of the layer cannot reach the layer time threshold on its own. This keeps the outer wall speed constant between layers, which avoids changes in shine and banding on small layers."
+msgstr ""
+"Cómo se ralentiza la impresión cuando una capa se imprime más rápido que el umbral de tiempo de capa.\n"
+"\n"
+"Enfriamiento uniforme: todas las características se ralentizan a la vez, perímetros externos incluidos.\n"
+"\n"
+"Superficie uniforme: primero se ralentizan el relleno, los perímetros internos y el resto de características, y los perímetros externos conservan su velocidad. Los perímetros externos solo se ralentizan cuando el resto de la capa no basta para llegar al umbral de tiempo de capa. Así la velocidad del perímetro externo es la misma en todas las capas, lo que evita cambios de brillo y bandas en las capas pequeñas."
+
+msgid "Uniform cooling"
+msgstr "Enfriamiento uniforme"
+
+msgid "Consistent surface"
+msgstr "Superficie uniforme"
+
+msgid "Short travel"
+msgstr "Desplazamiento corto"
+
+msgid ""
+"Acceleration of short travel moves that lead to an outer wall or overhang wall. A travel is short when it is shorter than the retraction \"Travel distance threshold\". A low value reduces ringing next to the outer wall without making the print noticeably slower.\n"
+"\n"
+"Set to 0 to keep the current behavior: those travels use the outer wall acceleration (bridge acceleration for overhang walls)."
+msgstr ""
+"Aceleración de los desplazamientos cortos que llevan a un perímetro externo o a un perímetro en voladizo. Un desplazamiento es corto cuando mide menos que el «Umbral de distancia de desplazamiento» de la retracción. Un valor bajo reduce el ringing junto al perímetro externo sin que la impresión sea apreciablemente más lenta.\n"
+"\n"
+"Con 0 se mantiene el comportamiento actual: esos desplazamientos usan la aceleración del perímetro externo (la de puentes en los perímetros en voladizo)."
