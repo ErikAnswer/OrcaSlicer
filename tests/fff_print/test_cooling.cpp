@@ -305,3 +305,46 @@ TEST_CASE("Short travel acceleration next to outer walls", "[Cooling][GCode]")
     CHECK(disabled.find("ACCEL=1234") == std::string::npos);
     CHECK(enabled.find("ACCEL=1234") != std::string::npos);
 }
+
+TEST_CASE("Slow down by height limits speed and acceleration above the starting height", "[Speed][GCode]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "gcode_flavor",                "klipper" },
+        { "layer_height",                0.2 },
+        { "slow_down_for_layer_cooling", false },
+    });
+    config.set_key_value("layer_change_gcode", new ConfigOptionString{";TEST_LAYER=[layer_num]"});
+    config.set_key_value("default_acceleration", new ConfigOptionFloatsNullable{5000.0});
+    config.set_key_value("outer_wall_acceleration", new ConfigOptionFloatsNullable{3000.0});
+    config.set_key_value("travel_acceleration", new ConfigOptionFloatsNullable{6000.0});
+    config.set_key_value("slowdown_start_height", new ConfigOptionFloatsNullable{5.0});
+    config.set_key_value("slowdown_end_height", new ConfigOptionFloatsNullable{10.0});
+    config.set_key_value("slowdown_start_speed", new ConfigOptionFloatsNullable{300.0});
+    config.set_key_value("slowdown_end_speed", new ConfigOptionFloatsNullable{20.0});
+    config.set_key_value("slowdown_start_acc", new ConfigOptionFloatsNullable{100000.0});
+    config.set_key_value("slowdown_end_acc", new ConfigOptionFloatsNullable{1234.0});
+    const double end_feedrate = 20.0 * 60.0;
+    const auto   all_feedrates = [](const FeatureFeedrates &feedrates) {
+        std::vector<double> all = feedrates.outer_wall;
+        all.insert(all.end(), feedrates.other.begin(), feedrates.other.end());
+        return all;
+    };
+
+    config.set_key_value("enable_height_slowdown", new ConfigOptionBoolsNullable{false});
+    const std::string disabled = slice({ cube(20) }, config);
+    config.set_key_value("enable_height_slowdown", new ConfigOptionBoolsNullable{true});
+    const std::string enabled = slice({ cube(20) }, config);
+
+    const std::vector<double> disabled_top = all_feedrates(extrusion_feedrates_in_layers(disabled, 60, 90));
+    const std::vector<double> enabled_top  = all_feedrates(extrusion_feedrates_in_layers(enabled, 60, 90));
+    const std::vector<double> enabled_low  = all_feedrates(extrusion_feedrates_in_layers(enabled, 5, 20));
+
+    REQUIRE_FALSE(enabled_top.empty());
+    CHECK(std::any_of(disabled_top.begin(), disabled_top.end(), [&](double f) { return f > end_feedrate + 1.; }));
+    CHECK(std::all_of(enabled_top.begin(), enabled_top.end(), [&](double f) { return f < end_feedrate + 1.; }));
+    CHECK(std::any_of(enabled_low.begin(), enabled_low.end(), [&](double f) { return f > end_feedrate + 1.; }));
+    CHECK(all_feedrates(extrusion_feedrates_in_layers(disabled, 5, 20)) == enabled_low);
+    CHECK(disabled.find("ACCEL=1234") == std::string::npos);
+    CHECK(enabled.find("ACCEL=1234") != std::string::npos);
+}

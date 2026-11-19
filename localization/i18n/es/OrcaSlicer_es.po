@@ -38351,3 +38351,54 @@ msgstr "Este parámetro personalizado no está definido. Añádelo a los paráme
 
 msgid "This custom parameter is not defined in the filament it is read for"
 msgstr "Este parámetro personalizado no está definido en el filamento para el que se lee"
+
+msgid "Slow down by height"
+msgstr "Reducir la velocidad según la altura"
+
+msgid ""
+"Limit the speed and acceleration of the upper part of a print, for tall and slender parts that wobble near the top. From the starting height the limits go linearly from the starting values to the ending values, which then hold for the rest of the print.\n"
+"\n"
+"The limits apply to walls, infill, bridges and gap fill and to the travel moves that lead to them, not to the first layer, skirt, brim, supports or prime tower. They only lower speeds and accelerations, never raise them. The acceleration limit needs the normal printing acceleration to be above zero."
+msgstr ""
+"Limita la velocidad y la aceleración de la parte alta de la impresión, para piezas altas y esbeltas que se tambalean cerca de la punta. Desde la altura inicial los límites pasan de forma lineal de los valores iniciales a los finales, que se mantienen en el resto de la impresión.\n"
+"\n"
+"Los límites se aplican a perímetros, relleno, puentes y relleno de huecos y a los desplazamientos que llevan a ellos, no a la primera capa, la falda, el borde de adherencia, los soportes ni la torre de purga. Solo bajan velocidades y aceleraciones, nunca las suben. El límite de aceleración necesita que la aceleración de impresión normal sea mayor que cero."
+
+msgid "Starting height"
+msgstr "Altura inicial"
+
+msgid "Height above the bed from which the speed and acceleration limits apply."
+msgstr "Altura sobre la cama a partir de la cual se aplican los límites de velocidad y aceleración."
+
+msgid "Speed at starting height"
+msgstr "Velocidad en la altura inicial"
+
+msgid "Maximum speed at the starting height."
+msgstr "Velocidad máxima en la altura inicial."
+
+msgid "Acceleration at starting height"
+msgstr "Aceleración en la altura inicial"
+
+msgid "Maximum acceleration at the starting height."
+msgstr "Aceleración máxima en la altura inicial."
+
+msgid "Ending height"
+msgstr "Altura final"
+
+msgid "Height above the bed from which the ending speed and acceleration apply. It must be larger than the starting height, otherwise nothing is slowed down."
+msgstr "Altura sobre la cama a partir de la cual se aplican la velocidad y la aceleración finales. Tiene que ser mayor que la altura inicial; si no, no se reduce nada."
+
+msgid "Speed at ending height"
+msgstr "Velocidad en la altura final"
+
+msgid "Maximum speed from the ending height up."
+msgstr "Velocidad máxima a partir de la altura final."
+
+msgid "Acceleration at ending height"
+msgstr "Aceleración en la altura final"
+
+msgid "Maximum acceleration from the ending height up."
+msgstr "Aceleración máxima a partir de la altura final."
+
+msgid "Enable slowing down by height to use this setting."
+msgstr "Activa la reducción de velocidad según la altura para usar este ajuste."

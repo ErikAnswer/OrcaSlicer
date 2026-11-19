@@ -3298,6 +3298,15 @@ void TabPrint::build()
         line.append_option(optgroup->get_option("internal_bridge_speed", 0));
         optgroup->append_line(line);
 
+        optgroup = page->new_optgroup(L("Slow down by height"), L"param_speed", 15);
+        optgroup->append_single_option_line("enable_height_slowdown", "", 0);
+        optgroup->append_single_option_line("slowdown_start_height", "", 0);
+        optgroup->append_single_option_line("slowdown_start_speed", "", 0);
+        optgroup->append_single_option_line("slowdown_start_acc", "", 0);
+        optgroup->append_single_option_line("slowdown_end_height", "", 0);
+        optgroup->append_single_option_line("slowdown_end_speed", "", 0);
+        optgroup->append_single_option_line("slowdown_end_acc", "", 0);
+
         optgroup = page->new_optgroup(L("Travel speed"), L"param_travel_speed", 15);
         optgroup->append_single_option_line("travel_speed", "speed_settings_travel", 0);
 

@@ -9435,6 +9435,8 @@ std::string GCode::_extrude_piece(const ExtrusionPath &path, const std::string &
     gcode += this->unretract();
     m_config.apply(m_calib_config);
 
+    const std::optional<HeightSlowdown> height_slowdown = this->height_slowdown(path.role());
+
     // Orca: optimize for Klipper, set acceleration and jerk in one command
     unsigned int acceleration_i = 0;
     double jerk = 0;
@@ -9470,6 +9472,8 @@ std::string GCode::_extrude_piece(const ExtrusionPath &path, const std::string &
         } else {
             acceleration = m_config.default_acceleration.get_at(nozzle);
         }
+        if (height_slowdown)
+            acceleration = std::min(acceleration, height_slowdown->acceleration);
         acceleration_i = (unsigned int)floor(acceleration + 0.5);
     }
 
@@ -9712,6 +9716,9 @@ std::string GCode::_extrude_piece(const ExtrusionPath &path, const std::string &
     }
 }
     
+    if (height_slowdown)
+        speed = std::min(speed, height_slowdown->speed);
+
     bool requires_segmented_extrusion = false;
     // A uniform fan state can be represented by the normal path-wide marker. Only a
     // transition within the path requires point-by-point emission.
@@ -9795,6 +9802,9 @@ std::string GCode::_extrude_piece(const ExtrusionPath &path, const std::string &
             if (!NOZZLE_CONFIG(enable_overhang_speed))
                 for (ProcessedPoint &point : new_points)
                     point.speed = speed;
+            if (height_slowdown)
+                for (ProcessedPoint &point : new_points)
+                    point.speed = std::min(point.speed, float(height_slowdown->speed));
             requires_segmented_extrusion = std::any_of(new_points.begin(), new_points.end(),
                 [speed](const ProcessedPoint &point) { return fabs(double(point.speed) - speed) > 1; }); // Ignore small speed variations (under 1mm/sec)
             if (FILAMENT_CONFIG(enable_overhang_bridge_fan) && m_enable_cooling_markers && fan_overlap_threshold >= 0.f &&
@@ -10461,6 +10471,20 @@ std::string GCode::_encode_label_ids_to_base64(std::vector<size_t> ids)
     return encodeBase64(bitset);
 }
 
+std::optional<GCode::HeightSlowdown> GCode::height_slowdown(ExtrusionRole role) const
+{
+    if (m_layer == nullptr || this->on_first_layer() || role <= erNone || role > erGapFill || !NOZZLE_CONFIG(enable_height_slowdown))
+        return std::nullopt;
+    const double start_height = NOZZLE_CONFIG(slowdown_start_height);
+    const double end_height   = NOZZLE_CONFIG(slowdown_end_height);
+    const double height       = m_layer->print_z;
+    if (start_height >= end_height || height < start_height)
+        return std::nullopt;
+    const double ratio = std::min(1., (height - start_height) / (end_height - start_height));
+    return HeightSlowdown{std::max(1., lerp(NOZZLE_CONFIG(slowdown_start_speed), NOZZLE_CONFIG(slowdown_end_speed), ratio)),
+                          std::max(1., lerp(NOZZLE_CONFIG(slowdown_start_acc), NOZZLE_CONFIG(slowdown_end_acc), ratio))};
+}
+
 // This method accepts &point in print coordinates.
 std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string comment, double z/* = DBL_MAX*/)
 {
@@ -10590,6 +10614,20 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
         }
     }
     
+    const std::optional<HeightSlowdown> height_slowdown = this->height_slowdown(role);
+    std::vector<double>                 travel_speed_before_slowdown;
+    std::vector<double>                 travel_speed_z_before_slowdown;
+    if (height_slowdown) {
+        if (acceleration_to_set > 0)
+            acceleration_to_set = std::min(acceleration_to_set, (unsigned int) floor(height_slowdown->acceleration + 0.5));
+        travel_speed_before_slowdown   = m_writer.config.travel_speed.values;
+        travel_speed_z_before_slowdown = m_writer.config.travel_speed_z.values;
+        for (std::vector<double> *speeds : {&m_writer.config.travel_speed.values, &m_writer.config.travel_speed_z.values})
+            for (double &value : *speeds)
+                if (!std::isnan(value))
+                    value = std::min(value, height_slowdown->speed);
+    }
+
     if (m_writer.get_gcode_flavor() == gcfKlipper) {
         gcode += m_writer.set_accel_and_jerk(acceleration_to_set, jerk_to_set);
     } else {
@@ -10720,6 +10758,11 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
             }
         }
         this->set_last_pos(travel.points.back());
+    }
+
+    if (height_slowdown) {
+        m_writer.config.travel_speed.values   = std::move(travel_speed_before_slowdown);
+        m_writer.config.travel_speed_z.values = std::move(travel_speed_z_before_slowdown);
     }
 
     return gcode;

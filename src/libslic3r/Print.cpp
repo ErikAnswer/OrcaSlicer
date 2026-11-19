@@ -336,6 +336,13 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "bridge_acceleration",
         "travel_acceleration",
         "travel_short_distance_acceleration",
+        "enable_height_slowdown",
+        "slowdown_start_height",
+        "slowdown_start_speed",
+        "slowdown_start_acc",
+        "slowdown_end_height",
+        "slowdown_end_speed",
+        "slowdown_end_acc",
         "sparse_infill_acceleration",
         "internal_solid_infill_acceleration",
         // BBS
