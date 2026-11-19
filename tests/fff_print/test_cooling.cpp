@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/TriangleMesh.hpp"
@@ -192,7 +193,7 @@ struct FeatureFeedrates
     std::vector<double> other;
 };
 
-FeatureFeedrates extrusion_feedrates_after_first_layers(const std::string &gcode)
+FeatureFeedrates extrusion_feedrates_in_layers(const std::string &gcode, size_t first_layer, size_t last_layer)
 {
     FeatureFeedrates out;
     std::istringstream input(gcode);
@@ -220,10 +221,15 @@ FeatureFeedrates extrusion_feedrates_after_first_layers(const std::string &gcode
             else if (word.front() == 'E' && std::stod(word.substr(1)) > 0.)
                 extrudes = true;
         }
-        if (extrudes && layers_seen > 2)
+        if (extrudes && layers_seen >= first_layer && layers_seen <= last_layer)
             (outer_wall ? out.outer_wall : out.other).push_back(feedrate);
     }
     return out;
+}
+
+FeatureFeedrates extrusion_feedrates_after_first_layers(const std::string &gcode)
+{
+    return extrusion_feedrates_in_layers(gcode, 3, std::numeric_limits<size_t>::max());
 }
 
 } // namespace
@@ -252,15 +258,28 @@ TEST_CASE("Consistent surface slowdown keeps the outer wall speed", "[Cooling]")
 
 TEST_CASE("Consistent surface slows the outer wall once nothing else is left", "[Cooling]")
 {
+    // Hollow 10 mm cube with two walls: a middle layer is about 40 mm of outer wall and 38 mm of inner wall.
+    // At the 10 mm/s minimum, the inner wall alone gives about 4.5 s with the outer wall at speed and the
+    // whole layer about 7.8 s, so a 6 s threshold needs the second pass: the inner wall goes to its minimum
+    // and the outer wall is slowed down, but not to its minimum.
     DynamicPrintConfig config = layer_time_bound_config(cslConsistentSurface);
-    config.set_key_value("slow_down_layer_time", new ConfigOptionFloats{60.0});
-    config.set_key_value("slow_down_min_speed", new ConfigOptionFloats{20.0});
+    config.set_deserialize_strict({
+        { "wall_loops",            2 },
+        { "sparse_infill_density", "0%" },
+    });
+    config.set_key_value("slow_down_layer_time", new ConfigOptionFloats{6.0});
+    config.set_key_value("slow_down_min_speed", new ConfigOptionFloats{10.0});
+    const double min_feedrate        = 10.0 * 60.0;
+    const double outer_wall_feedrate = 60.0 * 60.0;
 
-    const FeatureFeedrates consistent = extrusion_feedrates_after_first_layers(slice({ cube(10) }, config));
+    const FeatureFeedrates middle = extrusion_feedrates_in_layers(slice({ cube(10) }, config), 15, 35);
 
-    REQUIRE_FALSE(consistent.outer_wall.empty());
-    CHECK(std::any_of(consistent.outer_wall.begin(), consistent.outer_wall.end(),
-                      [](double f) { return f < 60.0 * 60.0 - 1.; }));
+    REQUIRE_FALSE(middle.outer_wall.empty());
+    REQUIRE_FALSE(middle.other.empty());
+    CHECK(std::all_of(middle.other.begin(), middle.other.end(),
+                      [&](double f) { return std::abs(f - min_feedrate) < 1.; }));
+    CHECK(std::all_of(middle.outer_wall.begin(), middle.outer_wall.end(),
+                      [&](double f) { return f > min_feedrate + 1. && f < outer_wall_feedrate - 1.; }));
 }
 
 TEST_CASE("Short travel acceleration next to outer walls", "[Cooling][GCode]")

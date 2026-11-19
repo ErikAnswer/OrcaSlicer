@@ -2335,7 +2335,7 @@ void PrintConfigDef::init_fff_params()
     def           = this->add("travel_short_distance_acceleration", coFloats);
     def->label = L("Short travel");
     def->category = L("Speed");
-    def->tooltip = L("Acceleration of short travel moves that start or end at an outer wall or overhang wall. A travel is short "
+    def->tooltip = L("Acceleration of short travel moves that lead to an outer wall or overhang wall. A travel is short "
                      "when it is shorter than the retraction \"Travel distance threshold\". A low value reduces ringing next "
                      "to the outer wall without making the print noticeably slower.\n\n"
                      "Set to 0 to keep the current behavior: those travels use the outer wall acceleration (bridge acceleration "
