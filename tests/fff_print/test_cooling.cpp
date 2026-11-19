@@ -215,13 +215,16 @@ FeatureFeedrates extrusion_feedrates_in_layers(const std::string &gcode, size_t 
         std::istringstream words(line.substr(0, line.find(';')));
         std::string word;
         bool extrudes = false;
+        bool moves_xy = false;
         while (words >> word) {
             if (word.front() == 'F')
                 feedrate = std::stod(word.substr(1));
             else if (word.front() == 'E' && std::stod(word.substr(1)) > 0.)
                 extrudes = true;
+            else if (word.front() == 'X' || word.front() == 'Y')
+                moves_xy = true;
         }
-        if (extrudes && layers_seen >= first_layer && layers_seen <= last_layer)
+        if (extrudes && moves_xy && layers_seen >= first_layer && layers_seen <= last_layer)
             (outer_wall ? out.outer_wall : out.other).push_back(feedrate);
     }
     return out;

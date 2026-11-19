@@ -636,10 +636,13 @@ static inline void extruder_range_slow_down_non_proportional(
                 float time_adjustable = 0.f;
                 for (auto it = adj; it != by_min_print_speed.end(); ++ it)
                     time_adjustable += (*it)->adjustable_time((*it)->slowdown_external_perimeters());
-                float rate = (time_adjustable + time_stretch) / time_adjustable;
-                for (auto it = adj; it != by_min_print_speed.end(); ++ it)
-                    (*it)->slow_down_proportional(rate, (*it)->slowdown_external_perimeters());
-                return;
+                // Nothing left to stretch here, e.g. only held outer walls: keep lowering the other extruders.
+                if (time_adjustable > 0.f) {
+                    float rate = (time_adjustable + time_stretch) / time_adjustable;
+                    for (auto it = adj; it != by_min_print_speed.end(); ++ it)
+                        (*it)->slow_down_proportional(rate, (*it)->slowdown_external_perimeters());
+                    return;
+                }
             } else {
                 float feedrate_limit = std::max(feedrate_next, (*adj)->slow_down_min_speed);
                 bool  done           = false;
