@@ -1074,3 +1074,78 @@ TEST_CASE("Smooth timelapse prints each tower layer's wall once when a layer joi
     slice_precise_z_pair(config, "type1", 10.004, print);
     CHECK(count_joined_layers(print) > 0);
 }
+
+TEST_CASE("The Type 2 side scrape travels below the tower top without extruding, only when enabled", "[WipeTower]")
+{
+    // Two nozzles, filament 2 on the outer walls, so every layer changes tools.
+    const bool scrape        = GENERATE(false, true);
+    const double first_layer = 0.2;
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "outer_wall_filament_id",      2     },
+        { "enable_prime_tower",          true  },
+        { "wipe_tower_type",             "type2" },
+        { "wipe_tower_x",                30    },
+        { "wipe_tower_y",                30    },
+        { "layer_height",                0.2   },
+        { "initial_layer_print_height",  first_layer },
+        { "prime_tower_side_scrape",     scrape },
+        { "gcode_comments",              true  },
+        { "timelapse_type",              "0"   },
+        { "enable_wrapping_detection",   false },
+        { "raft_layers",                 "0"   } });
+    config.set_num_extruders(2);
+    config.set_deserialize_strict({
+        { "single_extruder_multi_material", false },
+        { "nozzle_diameter",                "0.4,0.4" },
+        { "printer_extruder_id",            "1,2" },
+        { "printer_extruder_variant",       "Direct Drive Standard,Direct Drive Standard" },
+        { "extruder_printable_height",      "0,0" },
+        { "filament_map_mode",              "Manual" },
+        { "filament_map",                   "1,2" } });
+    size_flush_to_nozzles(config);
+
+    TriangleMesh part = make_cube(10., 10., 5.);
+    part.translate(120.f, 120.f, 0.f);
+
+    Print print;
+    Model model;
+    init_print({ std::move(part) }, print, model, config, nullptr, false);
+    print.apply(model, config);
+    const std::string gcode = Slic3r::Test::gcode(print);
+    INFO((scrape ? "scrape on" : "scrape off"));
+
+    CHECK(gcode.find("toolchange_z") == std::string::npos);
+    if (!scrape) {
+        CHECK(gcode.find("SIDE SCRAPE") == std::string::npos);
+        return;
+    }
+
+    size_t scrapes   = 0;
+    bool   in_scrape = false;
+    double top_z     = 0.;
+    double low_z     = 0.;
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const std::string_view raw = line.raw();
+        if (raw.find("; CP TOOLCHANGE SIDE SCRAPE") != std::string_view::npos) {
+            ++scrapes;
+            in_scrape = true;
+            top_z = low_z = self.z();
+            return;
+        }
+        if (!in_scrape)
+            return;
+        if (line.has_e() || raw.find("Force restore layer Z") != std::string_view::npos) {
+            INFO("scrape " << scrapes << " from Z " << top_z << " down to Z " << low_z);
+            CHECK_FALSE(line.extruding(self));
+            CHECK(low_z < top_z - EPSILON);
+            CHECK(low_z >= first_layer + 0.4 - EPSILON);
+            in_scrape = false;
+            return;
+        }
+        if (line.has_z())
+            low_z = std::min(low_z, double(line.z()));
+    });
+    CHECK(scrapes > 0);
+    CHECK_FALSE(in_scrape);
+}
