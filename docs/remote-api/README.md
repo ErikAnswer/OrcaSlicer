@@ -195,7 +195,9 @@ a number or `true`/`false`, so it cannot carry G-code commands, and it weighs wh
 template that prints it as a temperature gets that temperature). Text values, a name that is not an identifier, or
 text that is not a JSON object are accepted by the write and refused at slicing, which stops with an error naming
 the profile and the parameter; so does a template that reads a parameter no profile defines, or one the filament
-in use does not define. `custom_parameters_filament` is a per-filament key (see below).
+in use does not define. A filament parameter keeps one kind across the filaments that define it: a name that is a
+number in one filament and `true`/`false` in another stops the slice too, whether or not a template reads it
+(integers and decimals mix freely). `custom_parameters_filament` is a per-filament key (see below).
 
 #### Per-filament keys
 
