@@ -3454,7 +3454,7 @@ void PrintConfigDef::init_fff_params()
 
     def = this->add("circle_compensation_speed", coFloats);
     def->label = L("Circle compensation speed");
-    def->tooltip = L("Speed used by the speed term (coef 1) of the circle compensation model. Radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values.");
+    def->tooltip = L("Speed of the inner and outer walls of the compensated circles (holes and contours up to the diameter limit), so the correction does not depend on the wall speeds of the process. It is also the speed of the speed term (coef 1) of the model: radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values. Walls with overhangs or short enough for the small perimeter speed keep their usual speed. 0 keeps the usual wall speeds.");
     def->sidetext = L("mm/s");
     def->min = 0;
     def->mode = comAdvanced;

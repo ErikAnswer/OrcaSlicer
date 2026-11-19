@@ -8711,7 +8711,11 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
     if (total_multipath_length > 0.0)
         m_multi_flow_segment_path_average_mm3_per_mm = weighted_sum_mm3_per_mm / total_multipath_length;
     // Orca: end of multipath average mm3_per_mm value calculation
-    
+
+    const bool has_overhang_paths = std::any_of(loop.paths.begin(), loop.paths.end(),
+                                                [](const ExtrusionPath &path) { return path.role() == erOverhangPerimeter; });
+    m_circle_compensation_speed = loop.circle_compensation && !has_overhang_paths ? FILAMENT_CONFIG(circle_compensation_speed) : -1.;
+
     if (!enable_seam_slope) {
         for (const ExtrusionPath& path : paths) {
             gcode += this->_extrude(path, description, speed_for_path(path));
@@ -8767,6 +8771,7 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
             paths.insert(paths.end(), new_loop.ends.begin(), new_loop.ends.end());
         }
     }
+    m_circle_compensation_speed = -1.;
 
     if (description == "perimeter") {
         m_processor.result().print_statistics.total_seam_gap_distance += static_cast<float>(seam_gap_distance_mm);
@@ -9549,12 +9554,12 @@ std::string GCode::_extrude_piece(const ExtrusionPath &path, const std::string &
     // set speed
     if (speed == -1) {
         if (path.role() == erPerimeter) {
-            speed = NOZZLE_CONFIG(inner_wall_speed);
+            speed = m_circle_compensation_speed > 0. ? m_circle_compensation_speed : NOZZLE_CONFIG(inner_wall_speed);
             if (sloped) {
                 speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(speed));
             }
         } else if (path.role() == erExternalPerimeter) {
-            speed = NOZZLE_CONFIG(outer_wall_speed);
+            speed = m_circle_compensation_speed > 0. ? m_circle_compensation_speed : NOZZLE_CONFIG(outer_wall_speed);
             if (sloped) {
                 speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(speed));
             }
@@ -9716,6 +9721,8 @@ std::string GCode::_extrude_piece(const ExtrusionPath &path, const std::string &
         (is_bridge(path.role()) || is_perimeter(path.role()))) {
             bool is_external = is_external_perimeter(path.role());
             double ref_speed   = is_external ? NOZZLE_CONFIG(outer_wall_speed) : NOZZLE_CONFIG(inner_wall_speed);
+            if (m_circle_compensation_speed > 0. && is_perimeter(path.role()))
+                ref_speed = m_circle_compensation_speed;
             if (ref_speed == 0)
                 ref_speed = FILAMENT_CONFIG(filament_max_volumetric_speed) / _mm3_per_mm;
 

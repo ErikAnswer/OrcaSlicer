@@ -168,6 +168,7 @@ public:
     bool        outer_walls_first_for_brim() const;
 
 private:
+    CircleBoundaries          collect_compensated_circles() const;
     std::vector<Polygons>     generate_lower_polygons_series(float width);
     void split_top_surfaces(const ExPolygons &orig_polygons, ExPolygons &top_fills, ExPolygons &non_top_polygons, ExPolygons &fill_clip) const;
     void apply_extra_perimeters(ExPolygons& infill_area);

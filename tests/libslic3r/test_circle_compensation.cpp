@@ -174,3 +174,70 @@ TEST_CASE("Circle compensation defaults are neutral", "[CircleCompensation]")
     REQUIRE(compensate_circles(plate, params) == plate);
     REQUIRE_FALSE(PrintObjectConfig::defaults().enable_circle_compensation.value);
 }
+
+TEST_CASE("Circle compensation records the circles it handles", "[CircleCompensation]")
+{
+    const ExPolygon tube(circle(0., 0., 5.), circle(0., 0., 2., false));
+
+    SECTION("with a zero correction the circles are kept and recorded") {
+        CircleBoundaries handled;
+        const ExPolygon  result = compensate_circles(tube, neutral_params(), nullptr, &handled);
+        REQUIRE(result.contour.points == tube.contour.points);
+        REQUIRE(handled.size() == 2);
+        REQUIRE(unscale<double>(handled[0].diameter) == Catch::Approx(10.).margin(0.01));
+        REQUIRE_FALSE(handled[0].hole);
+        REQUIRE(unscale<double>(handled[1].diameter) == Catch::Approx(4.).margin(0.01));
+        REQUIRE(handled[1].hole);
+    }
+
+    SECTION("with a correction the recorded diameter is the new one") {
+        CircleCompensationParams params = neutral_params();
+        params.contour_constant         = 0.1;
+        CircleBoundaries handled;
+        compensate_circles(tube, params, nullptr, &handled);
+        REQUIRE(handled.size() == 2);
+        REQUIRE(unscale<double>(handled[0].diameter) == Catch::Approx(10.2).margin(0.01));
+    }
+
+    SECTION("circles above the diameter limit are not recorded") {
+        CircleCompensationParams params = neutral_params();
+        params.diameter_limit           = 6.;
+        CircleBoundaries handled;
+        compensate_circles(tube, params, nullptr, &handled);
+        REQUIRE(handled.size() == 1);
+        REQUIRE(handled[0].hole);
+    }
+}
+
+TEST_CASE("Circle compensation finds the walls of compensated circles", "[CircleCompensation]")
+{
+    const ExPolygon  tube(circle(0., 0., 5.), circle(0., 0., 2., false));
+    CircleBoundaries handled;
+    compensate_circles(tube, neutral_params(), nullptr, &handled);
+
+    const CircleBoundaries found = find_compensated_circles(tube, handled);
+    REQUIRE(found.size() == 2);
+
+    SECTION("inner walls around the same center match on their own side") {
+        REQUIRE(is_compensated_loop(circle(0., 0., 4.6), false, found));
+        REQUIRE(is_compensated_loop(circle(0., 0., 2.4, false), true, found));
+    }
+
+    SECTION("walls elsewhere do not match") {
+        REQUIRE_FALSE(is_compensated_loop(circle(1., 0., 4.6), false, found));
+        REQUIRE_FALSE(is_compensated_loop(square(10., 10., 1.), false, found));
+    }
+
+    SECTION("a surface whose circles were not compensated has none") {
+        const ExPolygon other(circle(20., 0., 5.));
+        REQUIRE(find_compensated_circles(other, handled).empty());
+        REQUIRE(find_compensated_circles(tube, CircleBoundaries{}).empty());
+    }
+
+    SECTION("only the contour is found when only the contour was compensated") {
+        CircleBoundaries contour_only{ handled.front() };
+        const CircleBoundaries contour = find_compensated_circles(tube, contour_only);
+        REQUIRE(contour.size() == 1);
+        REQUIRE_FALSE(is_compensated_loop(circle(0., 0., 2.4, false), true, contour));
+    }
+}

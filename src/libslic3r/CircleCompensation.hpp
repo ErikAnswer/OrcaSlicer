@@ -49,7 +49,15 @@ bool change_circle_radius(Polygon &polygon, const Point &center, double radius, 
 // circles found here are real boundaries; the others separate two regions and must not move.
 CircleBoundaries detect_circle_boundaries(const ExPolygons &outline);
 
-ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params, const CircleBoundaries *outline = nullptr);
+// Circles the compensation handled are appended to compensated (with their new diameter), even when
+// the correction is zero: their walls print at the circle compensation speed.
+ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params, const CircleBoundaries *outline = nullptr,
+                             CircleBoundaries *compensated = nullptr);
+
+// Circles of a surface that are among the compensated ones of its layer region.
+CircleBoundaries find_compensated_circles(const ExPolygon &expolygon, const CircleBoundaries &compensated);
+// Whether a wall loop runs around one of the given circles: same center and same side (contour or hole).
+bool is_compensated_loop(const Polygon &loop, bool hole, const CircleBoundaries &circles);
 
 } // namespace Slic3r
 

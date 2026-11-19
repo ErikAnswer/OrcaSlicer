@@ -591,6 +591,8 @@ protected:
     // It sets the mm3_mm value for the adaptive PA post processor to be the average of that path
     // as calculated and stored in the m_multi_segment_path_average_mm3_per_mm value
     double          m_multi_flow_segment_path_average_mm3_per_mm = 0;
+    // Speed of the walls of a circle handled by the circle compensation (see extrude_loop()), -1 if none.
+    double          m_circle_compensation_speed = -1.;
     bool            m_multi_flow_segment_path_pa_set = false;
     // Adaptive PA last set flow to enable issuing of PA change commands when adaptive PA for overhangs
     // is enabled
