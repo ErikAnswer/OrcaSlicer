@@ -1107,7 +1107,8 @@ static std::string slice_side_scrape(const char *tower_type, const char *wall_ty
         { "filament_map_mode",              "Manual" },
         { "filament_map",                   "1,2" } });
     size_flush_to_nozzles(config);
-    config.set_deserialize_strict(extra);
+    for (const ConfigBase::SetDeserializeItem &item : extra)
+        config.set_deserialize_strict(item.opt_key, item.opt_value, item.append);
 
     auto filaments = [](int walls, int top) {
         return std::vector<ConfigBase::SetDeserializeItem>{
@@ -1245,7 +1246,8 @@ TEST_CASE("The tower keep-out grows by the side scrape reach only when a Type 2 
 {
     auto margin = [](std::vector<ConfigBase::SetDeserializeItem> items) {
         DynamicPrintConfig dyn = DynamicPrintConfig::full_print_config();
-        dyn.set_deserialize_strict(items);
+        for (const ConfigBase::SetDeserializeItem &item : items)
+            dyn.set_deserialize_strict(item.opt_key, item.opt_value, item.append);
         PrintConfig config;
         config.apply(dyn, true);
         return WipeTower2::side_scrape_margin(config);
