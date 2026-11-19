@@ -1212,6 +1212,11 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("wipe_tower_extra_rib_length", have_rib_wall, -1, rib_wall_reason);
     toggle_line("wipe_tower_rib_width", have_rib_wall, -1, rib_wall_reason);
     toggle_line("wipe_tower_fillet_wall", have_rib_wall, -1, rib_wall_reason);
+    const bool have_side_scrape_tower = have_prime_tower && supports_wipe_tower_2 && !is_belt_printer && !bSEMM;
+    toggle_line("prime_tower_side_scrape", have_side_scrape_tower, -1, _L("Enable the prime tower, select wipe tower Type 2 and disable single extruder multimaterial mode on a non-Bambu, non-belt printer."));
+    const bool have_side_scrape = have_side_scrape_tower && config->opt_bool("prime_tower_side_scrape");
+    for (auto el : {"prime_tower_side_scrape_length", "prime_tower_side_scrape_height", "prime_tower_side_scrape_speed", "prime_tower_side_scrape_wall_gap", "prime_tower_side_scrape_point_spacing", "prime_tower_side_scrape_along_length"})
+        toggle_line(el, have_side_scrape, -1, _L("Enable the side scrape after tool change to use this setting."));
     toggle_field("prime_tower_width", have_prime_tower && !have_rib_wall && !is_belt_printer, -1, _L("Enable the prime tower on a non-belt printer and choose a wall type other than Rib to edit tower width."));
 
     toggle_line("single_extruder_multi_material_priming", !bSEMM && have_prime_tower && supports_wipe_tower_2 && !is_belt_printer, -1, _L("Enable a Type 2 prime tower on a non-Bambu, non-belt printer and disable single extruder multimaterial mode."));

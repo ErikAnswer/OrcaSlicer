@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 #include <numeric>
+#include <optional>
 #include <memory>
 #include <sstream>
 #include <iomanip>
@@ -512,6 +513,15 @@ public:
 
 	WipeTowerWriter2& travel(const Vec2f &dest, float f = 0.f) 
 		{ return extrude_explicit(dest.x(), dest.y(), 0.f, f); }
+
+	// Travel with a Z given as G-code text, e.g. a placeholder expression resolved by GCode::append_tcr2().
+	WipeTowerWriter2& travel_z(const Vec2f &dest, const std::string &z, float f)
+	{
+		const Vec2f rot = this->rotate(dest);
+		m_gcode += "G1" + set_format_X(rot.x()) + set_format_Y(rot.y()) + " Z" + z + set_format_F(f) + "\n";
+		m_current_pos = dest;
+		return *this;
+	}
 
 	// Extrude a line from current position to x, y with the extrusion amount given by m_extrusion_flow.
 	WipeTowerWriter2& extrude(float x, float y, float f = 0.f)
@@ -1078,6 +1088,15 @@ bool WipeTower2::wait_for_temp_enabled(const PrintConfig& config)
     return config.wait_for_temp_on_wipe_tower.value && !config.single_extruder_multi_material.value;
 }
 
+double WipeTower2::side_scrape_margin(const PrintConfig& config)
+{
+    if (!config.prime_tower_side_scrape.value || config.wipe_tower_type.value != WipeTowerType::Type2 ||
+        config.single_extruder_multi_material.value)
+        return 0.;
+    return std::max(0., config.prime_tower_side_scrape_wall_gap.value) + config.prime_tower_side_scrape_length.value +
+           config.nozzle_diameter.get_at(0);
+}
+
 WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& default_region_config,int plate_idx, Vec3d plate_origin, const std::vector<std::vector<float>>& wiping_matrix, size_t initial_tool) :
     m_semm(config.single_extruder_multi_material.value),
     m_enable_filament_ramming(config.enable_filament_ramming.value),
@@ -1107,6 +1126,14 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
     m_extra_rib_length(config.wipe_tower_extra_rib_length),
     m_wall_type((int)config.wipe_tower_wall_type),
     m_use_gap_wall(use_gap_wall(config)),
+    m_side_scrape(config.prime_tower_side_scrape.value),
+    m_side_scrape_length(float(config.prime_tower_side_scrape_length.value)),
+    m_side_scrape_height(float(config.prime_tower_side_scrape_height.value)),
+    m_side_scrape_speed(float(config.prime_tower_side_scrape_speed.value)),
+    m_side_scrape_wall_gap(float(config.prime_tower_side_scrape_wall_gap.value)),
+    m_side_scrape_point_spacing(float(config.prime_tower_side_scrape_point_spacing.value)),
+    m_side_scrape_along_length(float(config.prime_tower_side_scrape_along_length.value)),
+    m_z_offset(float(config.z_offset.value)),
     m_enable_tower_interface_features(config.enable_tower_interface_features.value),
     m_enable_tower_interface_cooldown_during_tower(config.enable_tower_interface_cooldown_during_tower.value),
     m_wait_for_temp_on_wipe_tower(wait_for_temp_enabled(config))
@@ -1880,6 +1907,9 @@ void WipeTower2::toolchange_Change(
     if (wait_for_temp_here && !wait_beside_tower)
         writer.set_extruder_temp(wait_for_temp, true, wait_for_temp_tag());
 
+    if (m_side_scrape && !m_semm && wait_beside_tower && !is_first_layer())
+        toolchange_side_scrape(writer);
+
     writer.append("[deretraction_from_wipe_tower_generator]\n");
 
     // The toolchange Tn command will be inserted later, only in case that the user does
@@ -1918,6 +1948,96 @@ void WipeTower2::toolchange_Load(
         if (m_set_extruder_trimpot)
             writer.set_extruder_trimpot(550);
     }
+}
+
+// Outermost x of the polygon on the horizontal line at y: the largest on the right side, the smallest on the left.
+static std::optional<float> polygon_extreme_x(const Polygon& polygon, float y, bool right)
+{
+    const coord_t        sy = scaled(y);
+    std::optional<float> extreme;
+    for (size_t i = 0; i < polygon.points.size(); ++i) {
+        const Point& a = polygon.points[i];
+        const Point& b = polygon.points[(i + 1) % polygon.points.size()];
+        if ((a.y() > sy) == (b.y() > sy))
+            continue;
+        const double t = double(sy - a.y()) / double(b.y() - a.y());
+        const float  x = unscaled<float>(double(a.x()) + t * double(b.x() - a.x()));
+        if (!extreme || (right ? x > *extreme : x < *extreme))
+            extreme = x;
+    }
+    return extreme;
+}
+
+// Ported from BambuStudio 2.9.1 (AGPL-3.0) WipeTower::toolchange_side_scrape(), adapted to this tower:
+// only the left and right walls are used because they keep the same x on every layer, while the depth
+// of the tower (front and back walls) shrinks with height here.
+void WipeTower2::toolchange_side_scrape(WipeTowerWriter2& writer)
+{
+    // Clearance above the tower's first layer, which also carries the brim.
+    constexpr float floor_clearance = 0.4f;
+    // Distance kept from both ends of the straight part of the wall, where ribs, fillets and the cone flare start.
+    constexpr float end_clearance = 2.f;
+
+    if (m_first_layer_idx >= m_plan.size())
+        return;
+    const float z_top   = m_sparse_layers_skipped ? m_current_height + m_layer_info->height : m_layer_info->z;
+    const float z_floor = m_plan[m_first_layer_idx].z + floor_clearance;
+    if (z_top - z_floor <= float(EPSILON))
+        return;
+
+    const float                      depth = m_layer_info->depth + m_perimeter_width;
+    const WipeTower::box_coordinates wt_box(Vec2f::Zero(), m_wipe_tower_width, depth);
+    const Polygon wall = m_wall_type == int(wtwCone) ? generate_rectange_polygon(wt_box.ld, wt_box.ru) :
+                                                       generate_support_rib_wall(writer, wt_box, 0., false, m_wall_type == int(wtwRib), false);
+
+    const unsigned int slot    = unsigned(m_num_tool_changes);
+    const bool         right   = slot % 2u == 0u;
+    const float        outward = right ? 1.f : -1.f;
+    const float        nominal = right ? m_wipe_tower_width : 0.f;
+
+    const int samples     = std::max(2, int(depth / 0.25f));
+    auto      sample_y    = [depth, samples](int i) { return float(i) * depth / float(samples); };
+    auto      is_straight = [&](int i) {
+        const std::optional<float> x = polygon_extreme_x(wall, sample_y(i), right);
+        return x && std::abs(*x - nominal) < 0.01f;
+    };
+    int lo = samples / 2;
+    int hi = lo;
+    if (!is_straight(lo))
+        return;
+    while (lo > 1 && is_straight(lo - 1))
+        --lo;
+    while (hi < samples - 1 && is_straight(hi + 1))
+        ++hi;
+
+    const float margin   = std::min(end_clearance, 0.25f * (sample_y(hi) - sample_y(lo)));
+    const float along_lo = sample_y(lo) + margin;
+    const float along_hi = std::max(along_lo, sample_y(hi) - margin);
+    const float span     = along_hi - along_lo;
+    const int   points   = std::clamp(int(std::lround(span / std::max(0.1f, m_side_scrape_point_spacing))), 1, 64);
+    const float along0   = along_lo + (float((slot / 2u) % unsigned(points)) + 0.5f) * span / float(points);
+
+    const Vec2f entry  = writer.pos();
+    const float smear  = std::min(m_side_scrape_along_length, span);
+    float       along1 = std::clamp(along0 + (entry.y() >= along0 ? smear : -smear), along_lo, along_hi);
+    if (std::abs(along1 - along0) <= float(EPSILON))
+        along1 = std::clamp(along0 + (entry.y() >= along0 ? -smear : smear), along_lo, along_hi);
+
+    const float scrape_x = nominal + outward * (0.5f * m_perimeter_width + m_side_scrape_wall_gap);
+    const float start_x  = nominal + outward * (0.5f * m_perimeter_width + std::max(0.f, m_side_scrape_wall_gap) + m_side_scrape_length);
+    const float feedrate = m_side_scrape_speed * 60.f;
+    // Z is resolved against the real tower height in GCode::append_tcr2(), which differs from the planned
+    // one on a compacted tower.
+    const std::string z_low = "{digits(max(toolchange_z - " + float_to_string_decimal_point(m_side_scrape_height, 3) + ", " +
+                              float_to_string_decimal_point(z_floor + m_z_offset, 3) + "), 0, 3)}";
+
+    writer.append("; CP TOOLCHANGE SIDE SCRAPE\n")
+          .travel(Vec2f(start_x, along0), feedrate)
+          .append("G1 Z" + z_low + " F" + std::to_string(int(std::lround(m_travel_speed * 60.f))) + "\n")
+          .travel_z(Vec2f(scrape_x, along0), "{digits(toolchange_z, 0, 3)}", feedrate);
+    if (std::abs(along1 - along0) > float(EPSILON))
+        writer.travel(Vec2f(scrape_x, along1), feedrate);
+    writer.travel(entry, m_travel_speed * 60.f);
 }
 
 // Wipe the newly loaded filament until the end of the assigned wipe area.
