@@ -699,7 +699,9 @@ static inline void extruder_range_slow_down_consistent_surface(
         return adj.maximum_time_after_slowdown(adj.slowdown_external_perimeters());
     });
     if (time_holding_external > slow_down_layer_time) {
-        extruder_range_slow_down_non_proportional(it_begin, it_end, slow_down_layer_time - range_time(elapsed_time));
+        const float time_stretch = slow_down_layer_time - range_time(elapsed_time);
+        if (time_stretch > 0.f)
+            extruder_range_slow_down_non_proportional(it_begin, it_end, time_stretch);
         set_hold_external_perimeters(false);
         return;
     }
