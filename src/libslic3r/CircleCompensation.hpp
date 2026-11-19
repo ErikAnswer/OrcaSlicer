@@ -34,10 +34,22 @@ struct CircleCompensationParams
 double circle_contour_correction(const CircleCompensationParams &params, double diameter);
 double circle_hole_correction(const CircleCompensationParams &params, double diameter);
 
+struct CircleBoundary
+{
+    Point  center;
+    double diameter{ 0. };
+    bool   hole{ false };
+};
+using CircleBoundaries = std::vector<CircleBoundary>;
+
 bool is_approx_circle(const Polygon &polygon, Point &center, double &diameter);
 bool change_circle_radius(Polygon &polygon, const Point &center, double radius, double delta);
 
-ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params);
+// Circular contours and holes of the layer outline. With several regions in a layer, only the
+// circles found here are real boundaries; the others separate two regions and must not move.
+CircleBoundaries detect_circle_boundaries(const ExPolygons &outline);
+
+ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params, const CircleBoundaries *outline = nullptr);
 
 } // namespace Slic3r
 

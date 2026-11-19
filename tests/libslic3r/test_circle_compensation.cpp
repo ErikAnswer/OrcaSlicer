@@ -144,6 +144,27 @@ TEST_CASE("Circle compensation resizes holes and contours", "[CircleCompensation
     }
 }
 
+TEST_CASE("Circle compensation leaves boundaries between regions alone", "[CircleCompensation]")
+{
+    ExPolygon plate(square(0., 0., 20.));
+    plate.holes.push_back(circle(0., 0., 5., false));
+    ExPolygon insert(circle(0., 0., 5.));
+
+    const CircleBoundaries outline = detect_circle_boundaries(ExPolygons{ ExPolygon(square(0., 0., 20.)) });
+    REQUIRE(outline.empty());
+
+    CircleCompensationParams params = neutral_params();
+    params.hole_constant    = 0.1;
+    params.contour_constant = 0.1;
+    REQUIRE(compensate_circles(plate, params, &outline) == plate);
+    REQUIRE(compensate_circles(insert, params, &outline) == insert);
+
+    const CircleBoundaries real_hole = detect_circle_boundaries(ExPolygons{ plate });
+    REQUIRE(real_hole.size() == 1);
+    REQUIRE(real_hole.front().hole);
+    REQUIRE(measured_diameter(compensate_circles(plate, params, &real_hole).holes.front()) == Catch::Approx(10.2).margin(0.005));
+}
+
 TEST_CASE("Circle compensation defaults are neutral", "[CircleCompensation]")
 {
     const PrintConfig              config = PrintConfig::defaults();

@@ -52,13 +52,26 @@ LayerRegion* Layer::add_region(const PrintRegion *print_region)
     return m_regions.back();
 }
 
-// merge all regions' slices to get islands
-void Layer::apply_circle_compensation()
+void Layer::apply_circle_compensation(ExPolygons *elephant_foot_uncompensated)
 {
+    if (m_regions.empty())
+        return;
+    CircleBoundaries        boundaries;
+    const CircleBoundaries *outline = nullptr;
+    if (m_regions.size() > 1) {
+        boundaries = detect_circle_boundaries(this->merged(float(SCALED_EPSILON)));
+        outline    = &boundaries;
+    }
     for (LayerRegion *layerm : m_regions)
-        layerm->apply_circle_compensation();
+        layerm->apply_circle_compensation(outline);
+    if (elephant_foot_uncompensated != nullptr) {
+        const CircleCompensationParams params = m_regions.front()->circle_compensation_params();
+        for (ExPolygon &expolygon : *elephant_foot_uncompensated)
+            expolygon = compensate_circles(expolygon, params);
+    }
 }
 
+// merge all regions' slices to get islands
 void Layer::make_slices()
 {
     ExPolygons slices;

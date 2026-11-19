@@ -963,14 +963,19 @@ void LayerRegion::process_external_surfaces(const Layer *lower_layer, const Poly
 }
 #endif
 
-void LayerRegion::apply_circle_compensation()
+CircleCompensationParams LayerRegion::circle_compensation_params() const
 {
     const PrintObject &object        = *this->layer()->object();
     const unsigned int wall_filament = this->region().extruder(frExternalPerimeter);
-    const CircleCompensationParams params = CircleCompensationParams::from_config(
-        object.print()->config(), wall_filament > 0 ? wall_filament - 1 : 0, object.config().circle_compensation_manual_offset.value);
+    return CircleCompensationParams::from_config(object.print()->config(), wall_filament > 0 ? wall_filament - 1 : 0,
+                                                 object.config().circle_compensation_manual_offset.value);
+}
+
+void LayerRegion::apply_circle_compensation(const CircleBoundaries *outline)
+{
+    const CircleCompensationParams params = this->circle_compensation_params();
     for (Surface &surface : this->slices.surfaces)
-        surface.expolygon = compensate_circles(surface.expolygon, params);
+        surface.expolygon = compensate_circles(surface.expolygon, params, outline);
 }
 
 void LayerRegion::prepare_fill_surfaces()

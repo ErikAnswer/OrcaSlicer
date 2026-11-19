@@ -1560,7 +1560,8 @@ void PrintObject::slice_volumes()
                         }
 	                }
 	                if (this->config().enable_circle_compensation)
-	                    layer->apply_circle_compensation();
+	                    layer->apply_circle_compensation(elfoot > 0.f && layer_id < lslices_elfoot_uncompensated.size() ?
+	                                                         &lslices_elfoot_uncompensated[layer_id] : nullptr);
 	                // Merge all regions' slices to get islands, chain them by a shortest path.
 	                layer->make_slices();
 	            }

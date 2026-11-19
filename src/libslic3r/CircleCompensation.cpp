@@ -14,6 +14,8 @@ namespace {
 const double circle_max_deviation = scale_(0.5);
 const double circle_max_variance  = 5. * scale_(0.01) * scale_(0.01);
 const double circle_min_radius    = scale_(0.05);
+const double boundary_center_tolerance   = scale_(0.05);
+const double boundary_diameter_tolerance = scale_(0.1);
 
 double clamp_correction(double value, double min_value, double max_value)
 {
@@ -30,6 +32,16 @@ bool keeps_topology(const ExPolygon &original, const ExPolygon &compensated)
     if (merged.size() != 1 || merged.front().holes.size() != original.holes.size())
         return false;
     return std::abs(merged.front().area() - compensated.area()) <= std::abs(compensated.area()) * 1e-3;
+}
+
+bool is_outline_circle(const CircleBoundaries *outline, const Point &center, double diameter, bool hole)
+{
+    if (outline == nullptr)
+        return true;
+    return std::any_of(outline->begin(), outline->end(), [&](const CircleBoundary &boundary) {
+        return boundary.hole == hole && (boundary.center - center).cast<double>().norm() <= boundary_center_tolerance &&
+               std::abs(boundary.diameter - diameter) <= boundary_diameter_tolerance;
+    });
 }
 
 } // namespace
@@ -106,7 +118,22 @@ bool change_circle_radius(Polygon &polygon, const Point &center, double radius, 
     return true;
 }
 
-ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params)
+CircleBoundaries detect_circle_boundaries(const ExPolygons &outline)
+{
+    CircleBoundaries boundaries;
+    Point            center;
+    double           diameter = 0.;
+    for (const ExPolygon &expolygon : outline) {
+        if (is_approx_circle(expolygon.contour, center, diameter))
+            boundaries.push_back({ center, diameter, false });
+        for (const Polygon &hole : expolygon.holes)
+            if (is_approx_circle(hole, center, diameter))
+                boundaries.push_back({ center, diameter, true });
+    }
+    return boundaries;
+}
+
+ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params, const CircleBoundaries *outline)
 {
     const double diameter_limit = scale_(params.diameter_limit);
     ExPolygon    compensated    = expolygon;
@@ -114,13 +141,15 @@ ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensatio
     Point        center;
     double       diameter = 0.;
 
-    if (is_approx_circle(compensated.contour, center, diameter) && diameter <= diameter_limit) {
+    if (is_approx_circle(compensated.contour, center, diameter) && diameter <= diameter_limit &&
+        is_outline_circle(outline, center, diameter, false)) {
         const double delta = circle_contour_correction(params, unscale<double>(diameter));
         if (delta != 0. && change_circle_radius(compensated.contour, center, diameter / 2., scale_(delta)))
             changed = true;
     }
     for (Polygon &hole : compensated.holes) {
-        if (is_approx_circle(hole, center, diameter) && diameter <= diameter_limit) {
+        if (is_approx_circle(hole, center, diameter) && diameter <= diameter_limit &&
+            is_outline_circle(outline, center, diameter, true)) {
             const double delta = circle_hole_correction(params, unscale<double>(diameter));
             if (delta != 0. && change_circle_radius(hole, center, diameter / 2., scale_(delta)))
                 changed = true;
