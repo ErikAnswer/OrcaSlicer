@@ -255,6 +255,67 @@ TEST_CASE("Volumetric per-extruder exclusions survive a 3MF round-trip", "[3mf][
     CHECK(legacy->serialize() == "0x0,10x0,10x10,0x10");
 }
 
+TEST_CASE("Custom G-code parameters survive a 3MF round-trip", "[3mf][CustomGCodeParameters]")
+{
+    ScopedSlic3rTemporaryDir temporary_dir("orca_custom_parameters");
+
+    Model model;
+    ModelObject *object = model.add_object();
+    object->add_volume(make_cube(10.0, 10.0, 10.0));
+    object->add_instance();
+
+    DynamicPrintConfig source;
+    source.set_key_value("custom_parameters_print", new ConfigOptionString("{\n  \"purge_lines\": 2\n}"));
+    source.set_key_value("custom_parameters_printer", new ConfigOptionString(R"({"park_x": 150, "has_chamber_fan": true})"));
+    source.set_key_value("custom_parameters_filament", new ConfigOptionStrings{
+        R"({"chamber": 45, "soak": true})",
+        "",
+        R"({"chamber": 60.5})",
+    });
+
+    const boost::filesystem::path backup_dir = temporary_dir.path() / "source_backup";
+    model.set_backup_path(backup_dir.string());
+
+    const boost::filesystem::path path = temporary_dir.path() / "round_trip.3mf";
+    const std::string path_string = path.string();
+    auto plate = std::make_unique<PlateData>();
+    plate->plate_index = 0;
+    StoreParams store_params;
+    store_params.path = path_string.c_str();
+    store_params.model = &model;
+    store_params.config = &source;
+    store_params.plate_data_list.push_back(plate.get());
+    store_params.strategy = SaveStrategy::Zip64 | SaveStrategy::Silence;
+    REQUIRE(store_bbs_3mf(store_params));
+
+    Model reloaded_model;
+    DynamicPrintConfig reloaded;
+    ConfigSubstitutionContext substitutions{ForwardCompatibilitySubstitutionRule::Disable};
+    PlateDataPtrs reloaded_plates;
+    std::vector<Preset *> project_presets;
+    bool is_bbl_3mf = false;
+    bool is_orca_3mf = false;
+    Semver file_version;
+    const bool loaded = load_bbs_3mf(
+        path_string.c_str(), &reloaded, &substitutions, &reloaded_model, &reloaded_plates,
+        &project_presets, &is_bbl_3mf, &is_orca_3mf, &file_version, nullptr,
+        LoadStrategy::LoadModel | LoadStrategy::LoadConfig);
+    release_PlateData_list(reloaded_plates);
+
+    REQUIRE(loaded);
+    const auto *print = reloaded.option<ConfigOptionString>("custom_parameters_print");
+    REQUIRE(print != nullptr);
+    CHECK(print->value == source.opt_string("custom_parameters_print"));
+
+    const auto *printer = reloaded.option<ConfigOptionString>("custom_parameters_printer");
+    REQUIRE(printer != nullptr);
+    CHECK(printer->value == source.opt_string("custom_parameters_printer"));
+
+    const auto *filaments = reloaded.option<ConfigOptionStrings>("custom_parameters_filament");
+    REQUIRE(filaments != nullptr);
+    CHECK(filaments->values == source.option<ConfigOptionStrings>("custom_parameters_filament")->values);
+}
+
 SCENARIO("Mirrored instance transforms survive 3mf round trips", "[3mf][Regression]") {
     const bool bbs_format = GENERATE(false, true);
 

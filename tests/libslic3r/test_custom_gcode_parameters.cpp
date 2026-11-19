@@ -61,6 +61,10 @@ TEST_CASE("A custom parameter that is not defined stops the expansion with its o
     CHECK_THROWS_WITH(parser.process("{custom_parameter_filament_fan}", 1), ContainsSubstring("not defined in the filament"));
     CHECK_THROWS_WITH(parser.process("[custom_parameter_filament_fan]", 1), ContainsSubstring("not defined in the filament"));
     CHECK_THROWS_WITH(parser.process("{custom_parameter_filament_fan[1]}", 0), ContainsSubstring("not defined in the filament"));
+    CHECK_THROWS_WITH(parser.process("{custom_parameter_filament_chamber[2]}", 0), ContainsSubstring("not defined in the filament"));
+    CHECK_THROWS_WITH(parser.process("{custom_parameter_filament_chamber}", 2), ContainsSubstring("not defined in the filament"));
+    CHECK_THROWS_WITH(parser.process("[custom_parameter_filament_chamber]", 2), ContainsSubstring("not defined in the filament"));
+    CHECK_THROWS_WITH(parser.process("[custom_parameter_filament_chamber_2]", 0), ContainsSubstring("not defined in the filament"));
     CHECK_THROWS_WITH(parser.process("{custom_parameter_filament_missing}", 0), ContainsSubstring("custom parameter is not defined"));
     CHECK_THROWS_WITH(parser.process("[custom_parameter_print_missing]", 0), ContainsSubstring("custom parameter is not defined"));
     CHECK_THROWS_WITH(parser.process("{custom_parameter_printer_missing + 1}", 0), ContainsSubstring("custom parameter is not defined"));

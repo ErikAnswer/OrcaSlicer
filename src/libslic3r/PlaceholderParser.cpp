@@ -1082,10 +1082,15 @@ namespace client
                 const ConfigOptionVectorBase *vec = static_cast<const ConfigOptionVectorBase*>(opt);
                 if (vec->empty())
                     ctx->throw_exception(L("Indexing an empty vector variable"), opt_key);
-                if (idx >= vec->size())
+                // A custom filament parameter read for a filament that does not exist is undefined, it does not fall back to the first one.
+                const bool custom_filament_parameter = CustomGCodeParameters::is_filament_variable(opt_key_str);
+                if (idx >= vec->size()) {
+                    if (custom_filament_parameter)
+                        ctx->throw_exception(undefined_custom_filament_parameter(), opt_key);
                     idx = 0;
+                }
                 if (vec->is_nil(idx))
-                    ctx->throw_exception(CustomGCodeParameters::is_filament_variable(opt_key_str) ?
+                    ctx->throw_exception(custom_filament_parameter ?
                                              undefined_custom_filament_parameter() :
                                              L("Trying to reference an undefined (nil) element of vector of optional values"),
                                          opt_key);
@@ -1368,6 +1373,9 @@ namespace client
                 }
             } else {
                 const int index = opt.has_index() ? opt.index : int(ctx->current_extruder_id);
+                // A custom filament parameter read for a filament that does not exist is undefined, it does not fall back to the first one.
+                if (custom_filament_parameter && index >= int(vec->size()))
+                    ctx->throw_exception(undefined_custom_filament_parameter(), opt.it_range);
                 size_t idx = (index < 0) ? 0 : (index >= int(vec->size())) ? 0 : size_t(index);
                 if (vec->is_nil(idx))
                     ctx->throw_exception(custom_filament_parameter ?

@@ -38317,13 +38317,13 @@ msgid "Your own values for the custom G-code, written as a JSON object of number
 msgstr "Valores propios para el G-code personalizado, escritos como un objeto JSON de números y valores true/false, por ejemplo {\"park_x\": 150, \"has_chamber_fan\": true}. El G-code personalizado lee un valor con {custom_parameter_printer_park_x}. El laminado se detiene con un error si el G-code lee un parámetro que no está definido."
 
 msgid "The custom parameters of %1% must be a JSON object of numbers and true/false values, for example {\"chamber\": 45, \"soak\": true}."
-msgstr "Los parámetros personalizados de %1% deben ser un objeto JSON de números y valores true/false, por ejemplo {\"chamber\": 45, \"soak\": true}."
+msgstr "Los parámetros personalizados en %1% deben ser un objeto JSON de números y valores true/false, por ejemplo {\"chamber\": 45, \"soak\": true}."
 
 msgid "Custom parameters of %1%: the name \"%2%\" may only contain letters, digits and underscores, and must not start with a digit."
-msgstr "Parámetros personalizados de %1%: el nombre «%2%» solo puede llevar letras, dígitos y guiones bajos, y no puede empezar por un dígito."
+msgstr "Parámetros personalizados en %1%: el nombre «%2%» solo puede llevar letras, dígitos y guiones bajos, y no puede empezar por un dígito."
 
 msgid "Custom parameters of %1%: the value of \"%2%\" must be a number or true/false. Text values are not allowed."
-msgstr "Parámetros personalizados de %1%: el valor de «%2%» debe ser un número o true/false. No se admiten textos."
+msgstr "Parámetros personalizados en %1%: el valor de «%2%» debe ser un número o true/false. No se admiten textos."
 
 msgid "The custom parameter \"%1%\" is a number in some filaments and true/false in others. It must be of the same kind in every filament."
 msgstr "El parámetro personalizado «%1%» es un número en unos filamentos y true/false en otros. Debe ser del mismo tipo en todos los filamentos."
