@@ -11,6 +11,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <string_view>
 #include <math.h>
 #include <limits>
 #include <utility>
@@ -1065,6 +1066,205 @@ float WipeTower2::purge_line_speed(const std::vector<float>& curve, int line, fl
     return std::min(target_speed, previous_speed + 50.f);
 }
 
+namespace {
+
+struct TowerGCodeLine
+{
+    std::vector<std::string> tokens;
+    std::string              comment;
+};
+
+TowerGCodeLine parse_tower_gcode_line(const std::string& line)
+{
+    TowerGCodeLine    parsed;
+    const size_t      comment_start = line.find(';');
+    const std::string code          = line.substr(0, comment_start);
+    if (comment_start != std::string::npos)
+        parsed.comment = line.substr(comment_start);
+    std::istringstream stream(code);
+    std::string        token;
+    while (stream >> token)
+        parsed.tokens.push_back(token);
+    return parsed;
+}
+
+bool tower_gcode_param(const TowerGCodeLine& line, char key, float& value)
+{
+    for (size_t i = 1; i < line.tokens.size(); ++i) {
+        const std::string& token = line.tokens[i];
+        if (token.size() < 2 || token.front() != key)
+            continue;
+        const size_t number_end = token.find_first_not_of("+-.0123456789", 1);
+        const size_t number_len = number_end == std::string::npos ? std::string::npos : number_end - 1;
+        value = float(string_to_double_decimal_point(std::string_view(token).substr(1, number_len)));
+        return true;
+    }
+    return false;
+}
+
+std::string format_tower_feedrate(float feedrate)
+{
+    return "F" + std::to_string(std::max(1, int(std::floor(feedrate + 0.5f))));
+}
+
+std::string with_tower_feedrate(const TowerGCodeLine& line, float feedrate)
+{
+    std::string out;
+    bool        replaced = false;
+    for (const std::string& token : line.tokens) {
+        if (!out.empty())
+            out += ' ';
+        if (token.front() == 'F' && !replaced) {
+            out += format_tower_feedrate(feedrate);
+            replaced = true;
+        } else
+            out += token;
+    }
+    if (!replaced)
+        out += " " + format_tower_feedrate(feedrate);
+    if (!line.comment.empty())
+        out += " " + line.comment;
+    return out;
+}
+
+bool is_splittable_tower_move(const TowerGCodeLine& line, const std::string& raw_line)
+{
+    if (line.tokens.empty() || line.tokens.front() != "G1" || !line.comment.empty() ||
+        raw_line.find(WipeTower::never_skip_tag()) != std::string::npos)
+        return false;
+    return std::all_of(line.tokens.begin() + 1, line.tokens.end(), [](const std::string& token) {
+        return token.size() >= 2 && std::string_view("XYEF").find(token.front()) != std::string_view::npos;
+    });
+}
+
+} // namespace
+
+void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, float speed_factor, float filament_area,
+                                     const Vec2f& start_pos, const Vec2f& tool_change_start_pos)
+{
+    if (gcode.empty() || filament_area <= 0.f || speed_factor >= 1.f - 1e-4f)
+        return;
+    speed_factor = std::clamp(speed_factor, 0.05f, 1.f);
+
+    std::vector<std::string> lines;
+    for (size_t start = 0;;) {
+        const size_t newline = gcode.find('\n', start);
+        lines.emplace_back(gcode.substr(start, newline == std::string::npos ? std::string::npos : newline - start));
+        if (newline == std::string::npos)
+            break;
+        start = newline + 1;
+    }
+
+    struct Move
+    {
+        size_t line_idx;
+        float  e;
+        float  feedrate;
+        bool   splittable;
+        Vec2f  from;
+        Vec2f  to;
+    };
+    std::vector<Move>  moves;
+    std::vector<float> inherited_feedrate(lines.size(), 0.f);
+    float              print_feedrate   = 0.f;
+    float              running_feedrate = 0.f;
+    Vec2f              position         = start_pos;
+    for (size_t idx = 0; idx < lines.size(); ++idx) {
+        if (lines[idx] == "[change_filament_gcode]") {
+            position = tool_change_start_pos;
+            continue;
+        }
+        const TowerGCodeLine line = parse_tower_gcode_line(lines[idx]);
+        if (line.tokens.empty())
+            continue;
+        const std::string& command = line.tokens.front();
+        const bool         is_arc  = command == "G2" || command == "G3";
+        if (command != "G1" && !is_arc)
+            continue;
+
+        float      f = 0.f, e = 0.f, x = 0.f, y = 0.f;
+        const bool has_f     = tower_gcode_param(line, 'F', f);
+        const bool has_e     = tower_gcode_param(line, 'E', e);
+        const bool has_x     = tower_gcode_param(line, 'X', x);
+        const bool has_y     = tower_gcode_param(line, 'Y', y);
+        const bool is_motion = has_x || has_y || is_arc;
+        if (has_f)
+            running_feedrate = f;
+        else
+            inherited_feedrate[idx] = running_feedrate;
+        if (has_f && (is_motion || (!has_e && !has_x && !has_y)))
+            print_feedrate = f;
+
+        const Vec2f from = position;
+        if (has_x)
+            position.x() = x;
+        if (has_y)
+            position.y() = y;
+        if (has_e && e > 0.f && is_motion && print_feedrate > 0.f)
+            moves.push_back({idx, e, print_feedrate, !is_arc && is_splittable_tower_move(line, lines[idx]), from, position});
+    }
+    if (moves.empty())
+        return;
+
+    const float       tail_length  = tail_volume <= 0.f ? std::numeric_limits<float>::max() : tail_volume / filament_area;
+    std::vector<bool> slowed(lines.size(), false);
+    size_t            first_slowed = lines.size();
+    const auto        mark_slowed  = [&](size_t idx) {
+        slowed[idx]  = true;
+        first_slowed = std::min(first_slowed, idx);
+    };
+    float accumulated = 0.f;
+    for (auto move = moves.rbegin(); move != moves.rend() && accumulated < tail_length - 1e-6f; ++move) {
+        const float remaining = tail_length - accumulated;
+        accumulated += move->e;
+        if (!move->splittable || move->e <= remaining + 1e-5f) {
+            lines[move->line_idx] = with_tower_feedrate(parse_tower_gcode_line(lines[move->line_idx]), move->feedrate * speed_factor);
+            mark_slowed(move->line_idx);
+            continue;
+        }
+        const float       head_share = 1.f - remaining / move->e;
+        const Vec2f       mid        = move->from + (move->to - move->from) * head_share;
+        const std::string mid_x      = float_to_string_decimal_point(mid.x(), 3);
+        const std::string mid_y      = float_to_string_decimal_point(mid.y(), 3);
+        const auto        prints_as  = [&mid_x, &mid_y](const Vec2f& point) {
+            return mid_x == float_to_string_decimal_point(point.x(), 3) && mid_y == float_to_string_decimal_point(point.y(), 3);
+        };
+        if (prints_as(move->to))
+            break;
+        if (prints_as(move->from)) {
+            lines[move->line_idx] = with_tower_feedrate(parse_tower_gcode_line(lines[move->line_idx]), move->feedrate * speed_factor);
+            mark_slowed(move->line_idx);
+            break;
+        }
+        const TowerGCodeLine original = parse_tower_gcode_line(lines[move->line_idx]);
+        const std::string    e_head   = float_to_string_decimal_point(move->e * head_share, 5);
+        const float          e_tail   = move->e - float(string_to_double_decimal_point(e_head));
+        std::string          head     = "G1 X" + mid_x + " Y" + mid_y + " E" + e_head;
+        for (const std::string& token : original.tokens)
+            if (token.front() == 'F')
+                head += " " + token;
+        TowerGCodeLine tail;
+        tail.tokens = {"G1", "X" + float_to_string_decimal_point(move->to.x(), 3), "Y" + float_to_string_decimal_point(move->to.y(), 3),
+                       "E" + float_to_string_decimal_point(e_tail, 5)};
+        lines[move->line_idx] = head + "\n" + with_tower_feedrate(tail, move->feedrate * speed_factor);
+        mark_slowed(move->line_idx);
+        break;
+    }
+
+    for (size_t idx = first_slowed + 1; idx < lines.size(); ++idx)
+        if (!slowed[idx] && inherited_feedrate[idx] > 0.f)
+            lines[idx] = with_tower_feedrate(parse_tower_gcode_line(lines[idx]), inherited_feedrate[idx]);
+
+    std::string out;
+    out.reserve(gcode.size() + 64);
+    for (size_t idx = 0; idx < lines.size(); ++idx) {
+        out += lines[idx];
+        if (idx + 1 < lines.size())
+            out += '\n';
+    }
+    gcode = std::move(out);
+}
+
 bool WipeTower2::use_gap_wall(const PrintConfig& config)
 {
     // The cone wall has its own fully separate generator with no gap machinery.
@@ -1124,6 +1324,9 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
         m_infill_speed = 80.f;
     if (m_perimeter_speed == 0.f)
         m_perimeter_speed = 80.f;
+
+    m_tail_speed_factor    = std::clamp(float(config.prime_tower_tail_speed_factor.value) / 100.f, 0.1f, 1.f);
+    m_tail_slowdown_volume = std::max(0.f, float(config.prime_tower_tail_slowdown_volume.value));
 
 
     // If this is a single extruder MM printer, we will use all the SE-specific config values.
@@ -2611,6 +2814,13 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
             else
                 layer_result[idx] = merge_tcr(layer_result[idx], finish_layer_tcr);
         }
+
+        if (m_tail_speed_factor < 1.f && !is_first_layer())
+            for (WipeTower::ToolChangeResult& tcr : layer_result) {
+                const size_t tail_tool = size_t(tcr.new_tool) < m_filpar.size() ? size_t(tcr.new_tool) : m_current_tool;
+                apply_tail_slowdown(tcr.gcode, m_tail_slowdown_volume, m_tail_speed_factor, m_filpar[tail_tool].filament_area,
+                                    tcr.start_pos, tcr.tool_change_start_pos);
+            }
 
         if (layer.combined_away)
             for (WipeTower::ToolChangeResult &tcr : layer_result)

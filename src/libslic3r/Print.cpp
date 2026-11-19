@@ -600,6 +600,8 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "wipe_tower_cone_angle"
             || opt_key == "wipe_tower_extra_spacing"
             || opt_key == "wipe_tower_max_purge_speed"
+            || opt_key == "prime_tower_tail_speed_factor"
+            || opt_key == "prime_tower_tail_slowdown_volume"
             || opt_key == "wipe_tower_wall_type"
             || opt_key == "wipe_tower_extra_rib_length"
             || opt_key == "wipe_tower_rib_width"

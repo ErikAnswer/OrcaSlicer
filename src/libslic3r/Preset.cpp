@@ -1469,6 +1469,8 @@ static std::vector<std::string> s_Preset_print_options{
     "wipe_tower_cone_angle",
     "wipe_tower_extra_spacing",
     "wipe_tower_max_purge_speed",
+    "prime_tower_tail_speed_factor",
+    "prime_tower_tail_slowdown_volume",
     "wipe_tower_wall_type",
     "wipe_tower_extra_rib_length",
     "wipe_tower_rib_width",
