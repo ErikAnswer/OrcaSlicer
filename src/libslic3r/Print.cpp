@@ -606,6 +606,13 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "wipe_tower_extra_rib_length"
             || opt_key == "wipe_tower_rib_width"
             || opt_key == "wipe_tower_fillet_wall"
+            || opt_key == "prime_tower_side_scrape"
+            || opt_key == "prime_tower_side_scrape_length"
+            || opt_key == "prime_tower_side_scrape_height"
+            || opt_key == "prime_tower_side_scrape_speed"
+            || opt_key == "prime_tower_side_scrape_wall_gap"
+            || opt_key == "prime_tower_side_scrape_point_spacing"
+            || opt_key == "prime_tower_side_scrape_along_length"
             || opt_key == "wipe_tower_filament"
             || opt_key == "wiping_volumes_extruders"
             || opt_key == "enable_filament_ramming"
@@ -1246,7 +1253,7 @@ double compacted_tower_footprint_padding(const PrintConfig &config, double brim_
     // lines, so the deposited material reaches half a line width further still. Allowing a line width
     // per side covers both, which is what keeps an estimated footprint enclosing the real one and the
     // pre-slice check stricter than the precise one.
-    return std::max(0., brim_width) + 2. * config.nozzle_diameter.get_at(0);
+    return std::max(0., brim_width) + 2. * config.nozzle_diameter.get_at(0) + WipeTower2::side_scrape_margin(config);
 }
 
 Polygons compacted_wipe_tower_rings(const CompactedTowerZone &zone, bool any_body_tier)
@@ -1708,6 +1715,10 @@ static StringObjectException layered_print_cleareance_valid(const Print &print, 
             wipe_tower_polygon.translate(Point(scale_(x), scale_(y)));
             convex_hulls_temp.push_back(wipe_tower_polygon);
         }
+        // The side scrape takes the nozzle outside the tower wall without depositing anything.
+        if (const double side_scrape_margin = WipeTower2::side_scrape_margin(config);
+            side_scrape_margin > 0. && print.wipe_tower_type() == WipeTowerType::Type2)
+            convex_hulls_temp = offset(convex_hulls_temp, float(scale_(side_scrape_margin)));
     }
     // Post-generation the mesh bottom already carries the brim. Pre-generation the body grows
     // by the brim only when its width is explicit; the auto brim and a Type2 cone base depend on

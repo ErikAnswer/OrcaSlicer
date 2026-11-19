@@ -60,6 +60,9 @@ public:
     // tower's tagged M109 can never disagree.
     static bool wait_for_temp_enabled(const PrintConfig& config);
 
+    // How far the side scrape takes the nozzle outside the tower wall, 0 when it is off.
+    static double side_scrape_margin(const PrintConfig& config);
+
     // Speed factors of filament_prime_tower_speed_factor_curve, one per purge line. Empty when the
     // curve is empty, malformed or has a factor outside 0.01..5, which keeps the built-in ramp.
     static std::vector<float> parse_speed_factor_curve(const std::string& curve);
@@ -281,6 +284,14 @@ private:
     float  m_rib_length                   = 0;
     Vec2f  m_rib_offset                   = Vec2f::Zero();
     bool   m_use_gap_wall                 = false;
+    bool   m_side_scrape                  = false;
+    float  m_side_scrape_length           = 2.f;
+    float  m_side_scrape_height           = 1.5f;
+    float  m_side_scrape_speed            = 200.f;
+    float  m_side_scrape_wall_gap         = 0.2f;
+    float  m_side_scrape_point_spacing    = 1.f;
+    float  m_side_scrape_along_length     = 2.f;
+    float  m_z_offset                     = 0.f;
     // Per plan layer, each toolchange's entry position (tower-local, un-shifted frame):
     // where the wall is cut open so the entry travel does not cross the printed wall.
     // Filled by compute_wall_skip_points() once the plan is final.
@@ -440,6 +451,10 @@ private:
 	void toolchange_Load(
 		WipeTowerWriter2 &writer,
 		const WipeTower::box_coordinates  &cleaning_box);
+
+    // Travel-only diagonal scrape against the left or right tower wall, right after the tool change and
+    // before the deretraction, so the filament the parked nozzle oozed sticks to the wall. Ends where it began.
+    void toolchange_side_scrape(WipeTowerWriter2 &writer);
 	
 	void toolchange_Wipe(
 		WipeTowerWriter2 &writer,

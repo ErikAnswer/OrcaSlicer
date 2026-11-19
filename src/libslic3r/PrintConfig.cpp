@@ -8545,6 +8545,76 @@ void PrintConfigDef::init_fff_params()
     def->mode    = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
+    // Ported from BambuStudio 2.9.1 (AGPL-3.0); Orca drives it from the Type 2 wipe tower.
+    def          = this->add("prime_tower_side_scrape", coBool);
+    def->label   = L("Side scrape after tool change");
+    def->tooltip = L("After a tool change and before the wipe line, move the nozzle to the left or right wall of the "
+                     "prime tower and do a diagonal lift scrape (travel only, no extrusion). This scrapes the filament "
+                     "that oozed from the parked nozzle onto the side wall instead of letting it land on the prime "
+                     "tower top surface. Only available with the Type 2 wipe tower.");
+    def->mode    = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def           = this->add("prime_tower_side_scrape_length", coFloat);
+    def->label    = L("Side scrape length");
+    def->tooltip  = L("Horizontal distance the nozzle travels toward the prime tower side wall during the diagonal scrape.");
+    def->sidetext = L("mm");
+    def->mode     = comAdvanced;
+    def->min      = 0.1;
+    def->max      = 20;
+    def->set_default_value(new ConfigOptionFloat(2.));
+
+    def           = this->add("prime_tower_side_scrape_height", coFloat);
+    def->label    = L("Side scrape lift height");
+    def->tooltip  = L("How far the nozzle descends below the current prime tower top before the diagonal scrape. The "
+                      "descent is clamped so the nozzle stays above the prime tower's brim and first layer. Layers with "
+                      "no room left for a descent get no scrape.");
+    def->sidetext = L("mm");
+    def->mode     = comAdvanced;
+    def->min      = 0.1;
+    def->max      = 10;
+    def->set_default_value(new ConfigOptionFloat(1.5));
+
+    def           = this->add("prime_tower_side_scrape_speed", coFloat);
+    def->label    = L("Side scrape speed");
+    def->tooltip  = L("Movement speed of the diagonal side scrape.");
+    def->sidetext = L("mm/s");
+    def->mode     = comAdvanced;
+    def->min      = 1;
+    def->max      = 2000;
+    def->set_default_value(new ConfigOptionFloat(200.));
+
+    def           = this->add("prime_tower_side_scrape_wall_gap", coFloat);
+    def->label    = L("Side scrape wall gap");
+    def->tooltip  = L("Distance kept between the end of the diagonal side scrape and the outer surface of the prime "
+                      "tower wall. A positive value keeps the scrape outside the wall.");
+    def->sidetext = L("mm");
+    def->mode     = comAdvanced;
+    def->min      = -2;
+    def->max      = 10;
+    def->set_default_value(new ConfigOptionFloat(0.2));
+
+    def           = this->add("prime_tower_side_scrape_point_spacing", coFloat);
+    def->label    = L("Side scrape point spacing");
+    def->tooltip  = L("Target distance between consecutive side scrape start points along one side wall. Scrape starts "
+                      "alternate between the left and right walls and are spread along the straight part of each wall, "
+                      "so the oozed filament does not pile up at a single spot.");
+    def->sidetext = L("mm");
+    def->mode     = comAdvanced;
+    def->min      = 0.5;
+    def->max      = 50;
+    def->set_default_value(new ConfigOptionFloat(1.));
+
+    def           = this->add("prime_tower_side_scrape_along_length", coFloat);
+    def->label    = L("Side scrape along-wall length");
+    def->tooltip  = L("Upper bound for the empty travel along the side wall right after the diagonal scrape, which smears "
+                      "the oozed filament further along the wall. The travel never leaves the straight part of the wall.");
+    def->sidetext = L("mm");
+    def->mode     = comAdvanced;
+    def->min      = 0;
+    def->max      = 50;
+    def->set_default_value(new ConfigOptionFloat(2.));
+
 
     def = this->add("wipe_tower_filament", coInt);
     def->gui_type = ConfigOptionDef::GUIType::i_enum_open;
