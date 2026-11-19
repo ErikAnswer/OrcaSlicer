@@ -1,5 +1,6 @@
 #include "PlaceholderParser.hpp"
 #include "Config.hpp"
+#include "CustomGCodeParameters.hpp"
 #include "Exception.hpp"
 #include "Flow.hpp"
 #include "PrintConfig.hpp"
@@ -1034,6 +1035,15 @@ namespace client
             output.set_deferred(deferred);
         }
 
+        static const char *undefined_custom_parameter()
+        {
+            return L("This custom parameter is not defined. Add it to the custom parameters of the process, printer or filament profile");
+        }
+        static const char *undefined_custom_filament_parameter()
+        {
+            return L("This custom parameter is not defined in the filament it is read for");
+        }
+
         static void legacy_variable_expansion(const MyContext *ctx, IteratorRange &opt_key, std::string &output)
         {
             if (ctx->skipping() && ! ctx->check_inactive_names())
@@ -1058,7 +1068,10 @@ namespace client
                 }
             }
             if (opt == nullptr)
-                ctx->throw_exception(ctx->skipping() ? L("Variable does not exist (in an inactive branch)") : L("Variable does not exist"), opt_key);
+                ctx->throw_exception(ctx->skipping()                                    ? L("Variable does not exist (in an inactive branch)") :
+                                     CustomGCodeParameters::is_variable(opt_key_str)   ? undefined_custom_parameter() :
+                                                                                          L("Variable does not exist"),
+                                     opt_key);
             if (ctx->skipping())
                 return;
             if (opt->is_scalar()) {
@@ -1069,10 +1082,18 @@ namespace client
                 const ConfigOptionVectorBase *vec = static_cast<const ConfigOptionVectorBase*>(opt);
                 if (vec->empty())
                     ctx->throw_exception(L("Indexing an empty vector variable"), opt_key);
-                if (idx >= vec->size())
+                // A custom filament parameter read for a filament that does not exist is undefined, it does not fall back to the first one.
+                const bool custom_filament_parameter = CustomGCodeParameters::is_filament_variable(opt_key_str);
+                if (idx >= vec->size()) {
+                    if (custom_filament_parameter)
+                        ctx->throw_exception(undefined_custom_filament_parameter(), opt_key);
                     idx = 0;
+                }
                 if (vec->is_nil(idx))
-                    ctx->throw_exception(L("Trying to reference an undefined (nil) element of vector of optional values"), opt_key);
+                    ctx->throw_exception(custom_filament_parameter ?
+                                             undefined_custom_filament_parameter() :
+                                             L("Trying to reference an undefined (nil) element of vector of optional values"),
+                                         opt_key);
                 output = vec->vserialize()[idx];
             }
         }
@@ -1096,7 +1117,8 @@ namespace client
                     opt = ctx->resolve_symbol(opt_key_str);
                 }
                 if (opt == nullptr)
-                    ctx->throw_exception(not_found, opt_key);
+                    ctx->throw_exception(! ctx->skipping() && CustomGCodeParameters::is_variable(opt_key_str) ? undefined_custom_parameter() : not_found,
+                                         opt_key);
             }
             if (! opt->is_vector())
                 ctx->throw_exception(L("Trying to index a scalar variable"), opt_key);
@@ -1113,10 +1135,17 @@ namespace client
 			int idx = opt_index->getInt();
 			if (idx < 0)
                 ctx->throw_exception(L("Negative vector index"), opt_key);
-            if (idx >= (int)vec->size())
+            const bool custom_filament_parameter = CustomGCodeParameters::is_filament_variable(opt_key_str);
+            if (idx >= (int)vec->size()) {
+                if (custom_filament_parameter)
+                    ctx->throw_exception(undefined_custom_filament_parameter(), opt_key);
                 idx = 0;
+            }
             if (vec->is_nil(idx))
-                ctx->throw_exception(L("Trying to reference an undefined (nil) element of vector of optional values"), opt_key);
+                ctx->throw_exception(custom_filament_parameter ?
+                                         undefined_custom_filament_parameter() :
+                                         L("Trying to reference an undefined (nil) element of vector of optional values"),
+                                     opt_key);
 			output = vec->vserialize()[idx];
         }
 
@@ -1131,7 +1160,7 @@ namespace client
                 if (opt == nullptr) {
                     opt = ctx->resolve_output_symbol(key);
                     if (opt == nullptr)
-                        ctx->throw_exception(L("Not a variable name"), opt_key);
+                        ctx->throw_exception(CustomGCodeParameters::is_variable(key) ? undefined_custom_parameter() : L("Not a variable name"), opt_key);
                     output.writable = true;
                 }
                 output.opt = opt;
@@ -1154,8 +1183,11 @@ namespace client
            OptWithPos       &output)
         {
             if (! ctx->skipping()) {
-                if (index < 0)
+                if (index < 0) {
+                    if (CustomGCodeParameters::is_filament_variable(std::string(opt.it_range.begin(), opt.it_range.end())))
+                        ctx->throw_exception(undefined_custom_filament_parameter(), opt.it_range);
                     index = 0; // Orca: fallback to first element if index < 0, this matches the behavior of BambuStudio
+                }
                 if (!opt.opt->is_vector())
                     index = -1; // Orca: ignore the index if variable is scalar, this matches the behavior of BambuStudio
                 output = opt;
@@ -1309,7 +1341,10 @@ namespace client
                 }
             };
 
-            if (!opt.has_index()) {
+            // A custom filament parameter without an index reads the filament in use.
+            const bool custom_filament_parameter = CustomGCodeParameters::is_filament_variable(
+                std::string(opt.it_range.begin(), opt.it_range.end()));
+            if (!opt.has_index() && !custom_filament_parameter) {
                 // Allow omitting extruder id when referencing vectors
                 const std::string opt_key(opt.it_range.begin(), opt.it_range.end());
                 const bool per_filament = std::find(filament_extruder_override_keys.begin(), filament_extruder_override_keys.end(), "filament_" + opt_key) != filament_extruder_override_keys.end();
@@ -1348,9 +1383,16 @@ namespace client
                 default: ctx->throw_exception(L("Referencing a vector variable when scalar is expected"), opt.it_range);
                 }
             } else {
-                size_t idx = (opt.index < 0) ? 0 : (opt.index >= int(vec->size())) ? 0 : size_t(opt.index);
+                const int index = opt.has_index() ? opt.index : int(ctx->current_extruder_id);
+                // A custom filament parameter read for a filament that does not exist is undefined, it does not fall back to the first one.
+                if (custom_filament_parameter && (index < 0 || index >= int(vec->size())))
+                    ctx->throw_exception(undefined_custom_filament_parameter(), opt.it_range);
+                size_t idx = (index < 0) ? 0 : (index >= int(vec->size())) ? 0 : size_t(index);
                 if (vec->is_nil(idx))
-                    ctx->throw_exception(L("Trying to reference an undefined (nil) element of vector of optional values"), opt.it_range);
+                    ctx->throw_exception(custom_filament_parameter ?
+                                             undefined_custom_filament_parameter() :
+                                             L("Trying to reference an undefined (nil) element of vector of optional values"),
+                                         opt.it_range);
                 switch (opt.opt->type()) {
                 case coFloats:   output.set_d(static_cast<const ConfigOptionFloats*>(opt.opt)->values[idx]); break;
                 case coInts:     output.set_i(static_cast<const ConfigOptionInts*>(opt.opt)->values[idx]); break;
@@ -1506,6 +1548,11 @@ namespace client
         static void is_nil_test(const MyContext *ctx, OptWithPos &opt, expr &output)
         {
             if (ctx->skipping()) {
+            } else if (CustomGCodeParameters::is_filament_variable(std::string(opt.it_range.begin(), opt.it_range.end())) && opt.opt->is_vector()) {
+                // Without an index it asks about the filament in use, and a filament that does not exist defines nothing.
+                const ConfigOptionVectorBase *vec = static_cast<const ConfigOptionVectorBase*>(opt.opt);
+                const size_t idx = opt.has_index() ? size_t(opt.index) : ctx->current_extruder_id;
+                output.set_b(idx >= vec->size() || vec->is_nil(idx));
             } else if (opt.opt->is_vector()) {
                 if (! opt.has_index())
                     ctx->throw_exception(L("Referencing a vector variable when scalar is expected"), opt.it_range);

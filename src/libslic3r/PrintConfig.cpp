@@ -3111,6 +3111,18 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings { "" });
 
+    def = this->add("custom_parameters_filament", coStrings);
+    def->label = L("Custom parameters");
+    def->tooltip = L("Your own values for the custom G-code, written as a JSON object of numbers and true/false values, "
+                     "for example {\"chamber\": 45, \"soak\": true}. Custom G-code reads a value as "
+                     "{custom_parameter_filament_chamber}, which gives the value of the filament in use, or as "
+                     "{custom_parameter_filament_chamber[0]} for a given filament, counting from 0. "
+                     "Slicing stops with an error when the G-code reads a parameter that the filament does not define.");
+    def->multiline = true;
+    def->full_width = true;
+    def->height = 13;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionStrings { "" });
 
     def = this->add("filament_multi_colour", coStrings);
     def->set_default_value(new ConfigOptionStrings{""});
@@ -5885,6 +5897,18 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString());
 
+    def = this->add("custom_parameters_print", coString);
+    def->label = L("Custom parameters");
+    def->tooltip = L("Your own values for the custom G-code, written as a JSON object of numbers and true/false values, "
+                     "for example {\"purge_lines\": 2, \"slow_start\": true}. Custom G-code reads a value as "
+                     "{custom_parameter_print_purge_lines}. "
+                     "Slicing stops with an error when the G-code reads a parameter that is not defined.");
+    def->multiline = true;
+    def->full_width = true;
+    def->height = 13;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionString());
+
     def = this->add("host_type", coEnum);
     def->label = L("Host Type");
     def->tooltip = L("Orca Slicer can upload G-code files to a printer host. This field must contain "
@@ -6163,7 +6187,19 @@ void PrintConfigDef::init_fff_params()
     def->height = 13;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString());
-    
+
+    def = this->add("custom_parameters_printer", coString);
+    def->label = L("Custom parameters");
+    def->tooltip = L("Your own values for the custom G-code, written as a JSON object of numbers and true/false values, "
+                     "for example {\"park_x\": 150, \"has_chamber_fan\": true}. Custom G-code reads a value as "
+                     "{custom_parameter_printer_park_x}. "
+                     "Slicing stops with an error when the G-code reads a parameter that is not defined.");
+    def->multiline = true;
+    def->full_width = true;
+    def->height = 13;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionString());
+
     def = this->add("printer_variant", coString);
     def->label = L("Printer variant");
     //def->tooltip = L("Name of the printer variant. For example, the printer variants may be differentiated by a nozzle diameter.");

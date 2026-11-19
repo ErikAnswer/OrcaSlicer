@@ -176,6 +176,29 @@ has each. `PUT /objects/{id}/config` answers the same way (`422`), and the MCP p
 a value out of range. `PUT /objects/{id}/height_range` keeps its printer limits (`422 layer_height_out_of_range` with `key`, `value`,
 `min`, `max`), with the same 0.01 mm floor, so a range's layer height of 0 is refused too.
 
+#### Custom G-code parameters
+
+`custom_parameters_print`, `custom_parameters_printer` and `custom_parameters_filament` hold the user's own values
+for the custom G-code, each a flat JSON object written as text: `{"chamber": 45, "soak": true}`. A G-code template
+reads them as `{custom_parameter_print_<name>}`, `{custom_parameter_printer_<name>}` and
+`{custom_parameter_filament_<name>}`; the filament form gives the value of the filament in use, or of a given one
+with an index (`[0]` is the first filament).
+
+```bash
+curl -X PUT -H "X-Api-Token: $TOK" -H "Content-Type: application/json" \
+  -d '{"custom_parameters_printer":"{\"park_x\": 150}"}' \
+  http://localhost:13130/api/v1/config
+```
+
+These keys are plain data and are **not** behind "Allow script, G-code and connection edits": a value may only be
+a number or `true`/`false`, so it cannot carry G-code commands, and it weighs what any numeric setting weighs (a
+template that prints it as a temperature gets that temperature). Text values, a name that is not an identifier, or
+text that is not a JSON object are accepted by the write and refused at slicing, which stops with an error naming
+the profile and the parameter; so does a template that reads a parameter no profile defines, or one the filament
+in use does not define. A filament parameter keeps one kind across the filaments that define it: a name that is a
+number in one filament and `true`/`false` in another stops the slice too, whether or not a template reads it
+(integers and decimals mix freely). `custom_parameters_filament` is a per-filament key (see below).
+
 #### Per-filament keys
 
 `GET /config` returns the **merged** config, so a vector-valued filament key holds
