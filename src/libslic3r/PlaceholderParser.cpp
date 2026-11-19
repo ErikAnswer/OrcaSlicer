@@ -1385,7 +1385,7 @@ namespace client
             } else {
                 const int index = opt.has_index() ? opt.index : int(ctx->current_extruder_id);
                 // A custom filament parameter read for a filament that does not exist is undefined, it does not fall back to the first one.
-                if (custom_filament_parameter && index >= int(vec->size()))
+                if (custom_filament_parameter && (index < 0 || index >= int(vec->size())))
                     ctx->throw_exception(undefined_custom_filament_parameter(), opt.it_range);
                 size_t idx = (index < 0) ? 0 : (index >= int(vec->size())) ? 0 : size_t(index);
                 if (vec->is_nil(idx))
