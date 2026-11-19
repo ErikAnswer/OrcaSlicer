@@ -23,6 +23,7 @@ add_executable(${_TEST_NAME}_tests
     test_belt_brim.cpp
     test_buildvolume.cpp
     test_calib.cpp
+    test_circle_compensation.cpp
     test_clipper_offset.cpp
     test_clipper_utils.cpp
     test_cut_connectors.cpp

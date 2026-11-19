@@ -349,6 +349,8 @@ set(lisbslic3r_sources
     Layer.cpp
     Layer.hpp
     LayerRegion.cpp
+    CircleCompensation.cpp
+    CircleCompensation.hpp
     LayOnFace.cpp
     LayOnFace.hpp
     libslic3r.cpp
