@@ -109,6 +109,7 @@
 #include <codecvt>
 #include "Format/STEP.hpp"
 #include "PlaceholderParser.hpp"
+#include "CustomGCodeParameters.hpp"
 #include "SurfaceCollection.hpp"
 #include "BeltBrim.hpp"
 
@@ -325,6 +326,9 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
         "filament_density",
         "filament_cost",
         "filament_notes",
+        "custom_parameters_print",
+        "custom_parameters_printer",
+        "custom_parameters_filament",
         "outer_wall_acceleration",
         "inner_wall_acceleration",
         "initial_layer_acceleration",
@@ -2116,6 +2120,11 @@ StringObjectException Print::validate(std::vector<StringObjectException> *warnin
 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
+
+    if (std::string error = CustomGCodeParameters::validate(m_config.custom_parameters_print.value, m_config.custom_parameters_printer.value,
+                                                            m_config.custom_parameters_filament.values);
+        !error.empty())
+        return { std::move(error) };
 
     // A flow ratio of 0 would extrude nothing, and a nil one would write NaN extrusion lengths.
     {

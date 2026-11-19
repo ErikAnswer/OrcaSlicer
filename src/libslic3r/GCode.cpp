@@ -27,6 +27,7 @@
 #include "PrintBase.hpp"
 #include "ConnectedBodies.hpp"
 #include "PrintConfig.hpp"
+#include "CustomGCodeParameters.hpp"
 #include "enum_bitmask.hpp"
 #include "libslic3r.h"
 #include "I18N.hpp"
@@ -3598,6 +3599,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // Enable passing global variables between PlaceholderParser invocations.
     m_placeholder_parser_integration.context.global_config = std::make_unique<DynamicConfig>();
     print.update_object_placeholders(m_placeholder_parser_integration.parser.config_writable(), ".gcode");
+    CustomGCodeParameters::apply(m_placeholder_parser_integration.parser.config_writable(), m_config.custom_parameters_print.value,
+                                 m_config.custom_parameters_printer.value, m_config.custom_parameters_filament.values,
+                                 m_config.filament_diameter.size());
 
     // Get optimal tool ordering to minimize tool switches of a multi-exruder print.
     // For a print by objects, find the 1st printing object.

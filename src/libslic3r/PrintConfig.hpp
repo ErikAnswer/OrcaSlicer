@@ -2200,6 +2200,9 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionStrings,             filament_notes))
     ((ConfigOptionString,              notes))
     ((ConfigOptionString,              printer_notes))
+    ((ConfigOptionString,              custom_parameters_print))
+    ((ConfigOptionString,              custom_parameters_printer))
+    ((ConfigOptionStrings,             custom_parameters_filament))
 
     ((ConfigOptionBools,               activate_chamber_temp_control))
     ((ConfigOptionInts ,               chamber_temperature))

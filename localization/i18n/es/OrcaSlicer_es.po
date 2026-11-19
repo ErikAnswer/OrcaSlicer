@@ -38303,3 +38303,42 @@ msgstr ""
 "Aceleración de los desplazamientos cortos que llevan a un perímetro externo o a un perímetro en voladizo. Un desplazamiento es corto cuando mide menos que el «Umbral de distancia de desplazamiento» de la retracción. Un valor bajo reduce el ringing junto al perímetro externo sin que la impresión sea apreciablemente más lenta.\n"
 "\n"
 "Con 0 se mantiene el comportamiento actual: esos desplazamientos usan la aceleración del perímetro externo (la de puentes en los perímetros en voladizo)."
+
+msgid "Custom parameters"
+msgstr "Parámetros personalizados"
+
+msgid "Your own values for the custom G-code, written as a JSON object of numbers and true/false values, for example {\"chamber\": 45, \"soak\": true}. Custom G-code reads a value as {custom_parameter_filament_chamber}, which gives the value of the filament in use, or as {custom_parameter_filament_chamber[0]} for a given filament, counting from 0. Slicing stops with an error when the G-code reads a parameter that the filament does not define."
+msgstr "Valores propios para el G-code personalizado, escritos como un objeto JSON de números y valores true/false, por ejemplo {\"chamber\": 45, \"soak\": true}. El G-code personalizado lee un valor con {custom_parameter_filament_chamber}, que da el valor del filamento en uso, o con {custom_parameter_filament_chamber[0]} para un filamento concreto, contando desde 0. El laminado se detiene con un error si el G-code lee un parámetro que el filamento no define."
+
+msgid "Your own values for the custom G-code, written as a JSON object of numbers and true/false values, for example {\"purge_lines\": 2, \"slow_start\": true}. Custom G-code reads a value as {custom_parameter_print_purge_lines}. Slicing stops with an error when the G-code reads a parameter that is not defined."
+msgstr "Valores propios para el G-code personalizado, escritos como un objeto JSON de números y valores true/false, por ejemplo {\"purge_lines\": 2, \"slow_start\": true}. El G-code personalizado lee un valor con {custom_parameter_print_purge_lines}. El laminado se detiene con un error si el G-code lee un parámetro que no está definido."
+
+msgid "Your own values for the custom G-code, written as a JSON object of numbers and true/false values, for example {\"park_x\": 150, \"has_chamber_fan\": true}. Custom G-code reads a value as {custom_parameter_printer_park_x}. Slicing stops with an error when the G-code reads a parameter that is not defined."
+msgstr "Valores propios para el G-code personalizado, escritos como un objeto JSON de números y valores true/false, por ejemplo {\"park_x\": 150, \"has_chamber_fan\": true}. El G-code personalizado lee un valor con {custom_parameter_printer_park_x}. El laminado se detiene con un error si el G-code lee un parámetro que no está definido."
+
+msgid "The custom parameters of %1% must be a JSON object of numbers and true/false values, for example {\"chamber\": 45, \"soak\": true}."
+msgstr "Los parámetros personalizados de %1% deben ser un objeto JSON de números y valores true/false, por ejemplo {\"chamber\": 45, \"soak\": true}."
+
+msgid "Custom parameters of %1%: the name \"%2%\" may only contain letters, digits and underscores, and must not start with a digit."
+msgstr "Parámetros personalizados de %1%: el nombre «%2%» solo puede llevar letras, dígitos y guiones bajos, y no puede empezar por un dígito."
+
+msgid "Custom parameters of %1%: the value of \"%2%\" must be a number or true/false. Text values are not allowed."
+msgstr "Parámetros personalizados de %1%: el valor de «%2%» debe ser un número o true/false. No se admiten textos."
+
+msgid "The custom parameter \"%1%\" is a number in some filaments and true/false in others. It must be of the same kind in every filament."
+msgstr "El parámetro personalizado «%1%» es un número en unos filamentos y true/false en otros. Debe ser del mismo tipo en todos los filamentos."
+
+msgid "the process"
+msgstr "el proceso"
+
+msgid "the printer"
+msgstr "la impresora"
+
+msgid "filament %1%"
+msgstr "el filamento %1%"
+
+msgid "This custom parameter is not defined. Add it to the custom parameters of the process, printer or filament profile"
+msgstr "Este parámetro personalizado no está definido. Añádelo a los parámetros personalizados del perfil de proceso, impresora o filamento"
+
+msgid "This custom parameter is not defined in the filament it is read for"
+msgstr "Este parámetro personalizado no está definido en el filamento para el que se lee"

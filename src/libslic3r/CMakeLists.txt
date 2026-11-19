@@ -402,6 +402,8 @@ set(lisbslic3r_sources
     pchheader.hpp
     PerimeterGenerator.cpp
     PerimeterGenerator.hpp
+    CustomGCodeParameters.cpp
+    CustomGCodeParameters.hpp
     PlaceholderParser.cpp
     PlaceholderParser.hpp
     Platform.cpp

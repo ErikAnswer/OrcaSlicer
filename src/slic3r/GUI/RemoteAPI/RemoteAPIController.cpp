@@ -1061,6 +1061,9 @@ bool Controller::config_value_in_range(const std::string &key, const ConfigOptio
 // Preferences > Remote API > "Allow script, G-code and connection edits". Writing a key
 // back to the value it already has is not a change and passes. The MCP server keeps the
 // same rule in its guard.py as a second check; keep the two in step.
+// The custom_parameters_* keys are left out on purpose: their values end up inside the
+// G-code, but only numbers and booleans are accepted at slicing (CustomGCodeParameters), so
+// they weigh what any numeric setting weighs. Text values would have to be guarded here.
 static bool is_sensitive_config_key(const std::string &key)
 {
     auto ends_with = [&key](const std::string &suffix) {

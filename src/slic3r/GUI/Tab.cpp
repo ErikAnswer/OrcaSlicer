@@ -3572,6 +3572,12 @@ void TabPrint::build()
         option.opt.height = 25;//250;
         optgroup->append_single_option_line(option, "others_settings_notes");
 
+        optgroup = page->new_optgroup(L("Custom parameters"), L"param_gcode", 0);
+        option = optgroup->get_option("custom_parameters_print");
+        option.opt.full_width = true;
+        option.opt.height = 15;
+        optgroup->append_single_option_line(option);
+
     // Orca: hide the dependencies tab for process for now. The UI is not ready yet.
     // page = add_options_page(L("Dependencies"), "param_profile_dependencies"); // icons ready
     //     optgroup = page->new_optgroup(L("Profile dependencies"), "param_profile_dependencies"); // icons ready
@@ -5179,6 +5185,13 @@ void TabFilament::build()
         option.opt.height = notes_field_height;// 250;
         optgroup->append_single_option_line(option);
 
+        optgroup = page->new_optgroup(L("Custom parameters"), L"param_gcode", 0);
+        optgroup->label_width = 0;
+        option = optgroup->get_option("custom_parameters_filament");
+        option.opt.full_width = true;
+        option.opt.height = 15;
+        optgroup->append_single_option_line(option);
+
         //build_preset_description_line(optgroup.get());
 }
 
@@ -5855,6 +5868,12 @@ void TabPrinter::build_fff()
         option = optgroup->get_option("printer_notes");
         option.opt.full_width = true;
         option.opt.height = notes_field_height;//250;
+        optgroup->append_single_option_line(option);
+
+        optgroup = page->new_optgroup(L("Custom parameters"), L"param_gcode", 0);
+        option = optgroup->get_option("custom_parameters_printer");
+        option.opt.full_width = true;
+        option.opt.height = 15;
         optgroup->append_single_option_line(option);
 #if 0
     //page = add_options_page(L("Dependencies"), "advanced");

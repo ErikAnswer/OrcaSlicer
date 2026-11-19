@@ -2293,3 +2293,71 @@ TEST_CASE("Nozzle change ramming is symmetric for identical filaments", "[MultiF
     }
     CHECK_THAT(medians[0], Catch::Matchers::WithinRel(medians[1], 0.01));
 }
+
+namespace {
+
+DynamicPrintConfig custom_parameters_config(const std::vector<std::string> &filament_parameters)
+{
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "skirt_loops",    0 },
+        { "brim_type",      "no_brim" },
+        { "print_sequence", "by object" },
+    });
+    config.set_key_value("custom_parameters_filament", new ConfigOptionStrings(filament_parameters));
+    return config;
+}
+
+// The second object prints its walls with the second filament, so the print starts on the first one and changes to the second.
+std::string slice_with_custom_parameters(const DynamicPrintConfig &config)
+{
+    return slice_with_object_overrides({ cube(20), cube(20) }, config,
+                                       { {}, { { "outer_wall_filament_id", "2" }, { "inner_wall_filament_id", "2" } } });
+}
+
+} // namespace
+
+TEST_CASE("Custom parameters reach the start and the filament change G-code with the value of each filament", "[MultiFilament][CustomGCodeParameters]")
+{
+    DynamicPrintConfig config = custom_parameters_config({ R"({"chamber": 45})", R"({"chamber": 60})" });
+    config.set_key_value("custom_parameters_print", new ConfigOptionString(R"({"purge_lines": 2})"));
+    config.set_key_value("custom_parameters_printer", new ConfigOptionString(R"({"park_x": 150})"));
+    config.set_key_value("machine_start_gcode", new ConfigOptionString(
+        "; start chamber {custom_parameter_filament_chamber} of {custom_parameter_filament_chamber[0]} and {custom_parameter_filament_chamber[1]}\n"
+        "; start park {custom_parameter_printer_park_x} lines {custom_parameter_print_purge_lines}\n"));
+    config.set_key_value("change_filament_gcode", new ConfigOptionString("; change to chamber {custom_parameter_filament_chamber}\n"));
+
+    std::string gcode;
+    REQUIRE_NOTHROW(gcode = slice_with_custom_parameters(config));
+    CHECK(gcode.find("; start chamber 45 of 45 and 60\n") != std::string::npos);
+    CHECK(gcode.find("; start park 150 lines 2\n") != std::string::npos);
+    CHECK(gcode.find("; change to chamber 60\n") != std::string::npos);
+    CHECK(gcode.find("!!!!!") == std::string::npos);
+}
+
+TEST_CASE("Slicing fails when custom G-code reads a custom parameter that is not defined", "[MultiFilament][CustomGCodeParameters]")
+{
+    SECTION("not defined in the filament that is changed to") {
+        DynamicPrintConfig config = custom_parameters_config({ R"({"chamber": 45})", "" });
+        config.set_key_value("change_filament_gcode", new ConfigOptionString("; change to chamber {custom_parameter_filament_chamber}\n"));
+        CHECK_THROWS_WITH(slice_with_custom_parameters(config), Catch::Matchers::ContainsSubstring("not defined in the filament"));
+    }
+    SECTION("not defined in any profile") {
+        DynamicPrintConfig config = custom_parameters_config({ "", "" });
+        config.set_key_value("machine_start_gcode", new ConfigOptionString("G1 X{custom_parameter_printer_park_x}\n"));
+        CHECK_THROWS_WITH(slice_with_custom_parameters(config), Catch::Matchers::ContainsSubstring("custom parameter is not defined"));
+    }
+}
+
+TEST_CASE("Slicing fails when the custom parameters are not valid", "[MultiFilament][CustomGCodeParameters]")
+{
+    const DynamicPrintConfig config = custom_parameters_config({ R"({"chamber": 45})", R"({"chamber": "60\nM104 S300"})" });
+
+    Print print;
+    Model model;
+    init_print({ cube(20) }, print, model, config);
+    const StringObjectException error = print.validate();
+    CHECK_THAT(error.string, Catch::Matchers::ContainsSubstring("filament 2"));
+    CHECK_THAT(error.string, Catch::Matchers::ContainsSubstring("\"chamber\""));
+
+    CHECK_THROWS_WITH(slice_with_custom_parameters(config), Catch::Matchers::ContainsSubstring("Text values are not allowed"));
+}
