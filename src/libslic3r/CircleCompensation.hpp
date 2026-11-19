@@ -49,8 +49,9 @@ bool change_circle_radius(Polygon &polygon, const Point &center, double radius, 
 // circles found here are real boundaries; the others separate two regions and must not move.
 CircleBoundaries detect_circle_boundaries(const ExPolygons &outline);
 
-// Circles the compensation handled are appended to compensated (with their new diameter), even when
-// the correction is zero: their walls print at the circle compensation speed.
+// Every circle the compensation applies to is appended to compensated, with its new diameter, or the
+// original one when the correction is zero or cannot be applied: their walls print at the circle
+// compensation speed.
 ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params, const CircleBoundaries *outline = nullptr,
                              CircleBoundaries *compensated = nullptr);
 

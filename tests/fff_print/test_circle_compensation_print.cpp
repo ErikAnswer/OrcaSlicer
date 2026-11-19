@@ -50,14 +50,16 @@ struct WallSpeedResult
     std::string gcode;
 };
 
-WallSpeedResult slice_pin(const std::string &wall_generator, const std::string &enabled)
+WallSpeedResult slice_pin(const std::string &wall_generator, const std::string &enabled, const std::string &speed = "17")
 {
     Print print;
     Model model;
-    Test::init_print({ make_cylinder(4., 4.) }, print, model,
+    TriangleMesh block = make_cube(20., 20., 4.);
+    block.translate(Vec3f(15.f, 0.f, 0.f));
+    Test::init_print({ make_cylinder(4., 4.), std::move(block) }, print, model,
                      { { "enable_circle_compensation", enabled },
                        { "wall_generator", wall_generator },
-                       { "circle_compensation_speed", "17" },
+                       { "circle_compensation_speed", speed },
                        { "outer_wall_speed", "60" },
                        { "inner_wall_speed", "80" },
                        { "wall_loops", "2" },
@@ -90,6 +92,12 @@ TEST_CASE("Circle compensation prints the walls of compensated circles at their 
     const WallSpeedResult enabled = slice_pin(wall_generator, "1");
     REQUIRE(enabled.compensated_loops == 2);
     REQUIRE(enabled.gcode.find("F1020") != std::string::npos);
+    // The block has no circles: its walls keep the outer and inner wall speeds.
+    REQUIRE(enabled.gcode.find("F3600") != std::string::npos);
+    REQUIRE(enabled.gcode.find("F4800") != std::string::npos);
+
+    const WallSpeedResult unset = slice_pin(wall_generator, "1", "0");
+    REQUIRE(unset.gcode.find("F1020") == std::string::npos);
 
     const WallSpeedResult disabled = slice_pin(wall_generator, "0");
     REQUIRE(disabled.compensated_loops == 0);

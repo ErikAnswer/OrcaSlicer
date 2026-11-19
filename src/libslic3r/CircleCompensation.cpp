@@ -143,6 +143,7 @@ ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensatio
     const double     diameter_limit = scale_(params.diameter_limit);
     ExPolygon        compensated    = expolygon;
     CircleBoundaries handled;
+    CircleBoundaries original;
     bool             changed = false;
     Point            center;
     double           diameter = 0.;
@@ -150,24 +151,24 @@ ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensatio
     auto compensate = [&](Polygon &polygon, bool hole) {
         if (!is_approx_circle(polygon, center, diameter) || diameter > diameter_limit || !is_outline_circle(outline, center, diameter, hole))
             return;
+        original.push_back({ center, diameter, hole });
         const double delta = hole ? circle_hole_correction(params, unscale<double>(diameter)) :
                                     circle_contour_correction(params, unscale<double>(diameter));
-        if (delta == 0.) {
-            handled.push_back({ center, diameter, hole });
-        } else if (change_circle_radius(polygon, center, diameter / 2., scale_(delta))) {
+        if (delta != 0. && change_circle_radius(polygon, center, diameter / 2., scale_(delta))) {
             handled.push_back({ center, diameter + 2. * scale_(delta), hole });
             changed = true;
+        } else {
+            handled.push_back(original.back());
         }
     };
     compensate(compensated.contour, false);
     for (Polygon &hole : compensated.holes)
         compensate(hole, true);
 
-    if (changed && !keeps_topology(expolygon, compensated))
-        return expolygon;
+    const bool keep = changed && keeps_topology(expolygon, compensated);
     if (compensated_circles != nullptr)
-        append(*compensated_circles, std::move(handled));
-    return changed ? compensated : expolygon;
+        append(*compensated_circles, keep || !changed ? std::move(handled) : std::move(original));
+    return keep ? compensated : expolygon;
 }
 
 CircleBoundaries find_compensated_circles(const ExPolygon &expolygon, const CircleBoundaries &compensated)
@@ -189,7 +190,7 @@ CircleBoundaries find_compensated_circles(const ExPolygon &expolygon, const Circ
 
 bool is_compensated_loop(const Polygon &loop, bool hole, const CircleBoundaries &circles)
 {
-    if (circles.empty() || loop.points.size() < 3)
+    if (circles.empty() || loop.points.size() < 3 || std::abs(loop.area()) < 1.)
         return false;
     const Point center = loop.centroid();
     return std::any_of(circles.begin(), circles.end(), [&](const CircleBoundary &circle) {
