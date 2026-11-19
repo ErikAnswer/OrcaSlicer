@@ -20,6 +20,7 @@
 #include <memory>
 #include <sstream>
 #include <iomanip>
+#include <locale>
 
 #include "libslic3r/Circle.hpp"
 #include "libslic3r/ArcFitter.hpp"
@@ -41,6 +42,7 @@
 #include "libslic3r/libslic3r.h"
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/log/trivial.hpp>
 #include "libslic3r/Config.hpp"
 
 
@@ -1039,6 +1041,40 @@ WipeTower::ToolChangeResult WipeTower2::construct_tcr(WipeTowerWriter2& writer,
 
 
 
+std::vector<float> WipeTower2::parse_speed_factor_curve(const std::string& curve)
+{
+    std::vector<float> factors;
+    std::istringstream stream(curve);
+    std::string        token;
+    while (std::getline(stream, token, ',')) {
+        std::istringstream token_stream(token);
+        token_stream.imbue(std::locale::classic());
+        double factor = 0.;
+        if (!(token_stream >> factor) || !(token_stream >> std::ws).eof() || !(factor >= 0.01 && factor <= 5.)) {
+            BOOST_LOG_TRIVIAL(warning) << "Ignoring filament_prime_tower_speed_factor_curve \"" << curve
+                                       << "\": expected comma-separated factors between 0.01 and 5 with a decimal point";
+            return {};
+        }
+        factors.push_back(float(factor));
+    }
+    return factors;
+}
+
+float WipeTower2::purge_line_speed(const std::vector<float>& curve, int line, float previous_speed, float target_speed)
+{
+    if (!curve.empty())
+        return curve[std::min<size_t>(size_t(std::max(line, 0)), curve.size() - 1)] * target_speed;
+    if (line <= 0)
+        return 0.33f * target_speed;
+    if (previous_speed < 0.34f * target_speed)
+        return 0.375f * target_speed;
+    if (previous_speed < 0.377 * target_speed)
+        return 0.458f * target_speed;
+    if (previous_speed < 0.46f * target_speed)
+        return 0.875f * target_speed;
+    return std::min(target_speed, previous_speed + 50.f);
+}
+
 bool WipeTower2::use_gap_wall(const PrintConfig& config)
 {
     // The cone wall has its own fully separate generator with no gap machinery.
@@ -1182,6 +1218,7 @@ void WipeTower2::set_extruder(size_t idx, const PrintConfig& config)
     m_filpar[idx].tower_interface_pre_extrusion_dist = config.filament_tower_interface_pre_extrusion_dist.get_at(idx);
     m_filpar[idx].tower_interface_pre_extrusion_length = config.filament_tower_interface_pre_extrusion_length.get_at(idx);
     m_filpar[idx].tower_ironing_area = config.filament_tower_ironing_area.get_at(idx);
+    m_filpar[idx].speed_factor_curve = parse_speed_factor_curve(config.filament_prime_tower_speed_factor_curve.get_at(idx));
     m_filpar[idx].tower_interface_purge_length = config.filament_tower_interface_purge_volume.get_at(idx);
 
     // If this is a single extruder MM printer, we will use all the SE-specific config values.
@@ -2032,7 +2069,8 @@ void WipeTower2::toolchange_Wipe(
 
 	// If spare layers are excluded->if 1 or less toolchange has been done, it must be sill the first layer, too.So slow down.
     const float target_speed = is_first_layer() || (m_num_tool_changes <= 1 && m_sparse_layers_skipped) ? m_first_layer_speed * 60.f : std::min(m_wipe_tower_max_purge_speed * 60.f, m_infill_speed * 60.f);
-    float wipe_speed = 0.33f * target_speed;
+    const std::vector<float>& speed_curve = m_filpar[m_current_tool].speed_factor_curve;
+    float wipe_speed = purge_line_speed(speed_curve, 0, 0.f, target_speed);
 
     // if there is less than 2.5*line_width to the edge, advance straightaway (there is likely a blob anyway)
     if ((m_left_to_right ? xr-writer.x() : writer.x()-xl) < 2.5f*line_width) {
@@ -2042,12 +2080,8 @@ void WipeTower2::toolchange_Wipe(
     
     // now the wiping itself:
 	for (int i = 0; true; ++i)	{
-		if (i!=0) {
-            if      (wipe_speed < 0.34f * target_speed) wipe_speed = 0.375f * target_speed;
-            else if (wipe_speed < 0.377 * target_speed) wipe_speed = 0.458f * target_speed;
-            else if (wipe_speed < 0.46f * target_speed) wipe_speed = 0.875f * target_speed;
-            else wipe_speed = std::min(target_speed, wipe_speed + 50.f);
-		}
+		if (i != 0)
+            wipe_speed = purge_line_speed(speed_curve, i, wipe_speed, target_speed);
 
 		float traversed_x = writer.x();
 

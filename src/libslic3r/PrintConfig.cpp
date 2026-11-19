@@ -3441,6 +3441,99 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloats { 4. });
 
+    def = this->add("filament_prime_tower_speed_factor_curve", coStrings);
+    def->label = L("Prime tower speed factor curve");
+    def->tooltip = L("Speed ramp of the purge lines on the prime tower after a tool change, as comma-separated "
+                     "multipliers of the tower purge speed, one per line. For example \"0.33,0.375,0.458,0.875\" "
+                     "prints the 1st line at 33%, the 2nd at 37.5% and so on; the last value is reused for the "
+                     "remaining lines. Use a decimal point; each value must be between 0.01 and 5.0, otherwise the "
+                     "built-in ramp is used. The filament's maximum volumetric speed still applies. Leave empty to "
+                     "keep the built-in ramp. Only used by the Type 2 wipe tower.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionStrings { "" });
+
+    def = this->add("circle_compensation_speed", coFloats);
+    def->label = L("Circle compensation speed");
+    def->tooltip = L("Speed used by the speed term (coef 1) of the circle compensation model. Radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values.");
+    def->sidetext = L("mm/s");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 200 });
+
+    def = this->add("counter_coef_1", coFloats);
+    def->label = L("Contour coef 1");
+    def->tooltip = L("Circle compensation of contours (cylinders): speed coefficient, in mm per mm/s. Radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values. Positive corrections make cylinders bigger.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("counter_coef_2", coFloats);
+    def->label = L("Contour coef 2");
+    def->tooltip = L("Circle compensation of contours (cylinders): diameter coefficient, in mm per mm of diameter. Radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values. Positive corrections make cylinders bigger.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("counter_coef_3", coFloats);
+    def->label = L("Contour coef 3");
+    def->tooltip = L("Circle compensation of contours (cylinders): constant term. Radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values. Positive corrections make cylinders bigger.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("hole_coef_1", coFloats);
+    def->label = L("Hole coef 1");
+    def->tooltip = L("Circle compensation of holes: speed coefficient, in mm per mm/s. Radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values. Positive corrections make holes bigger.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("hole_coef_2", coFloats);
+    def->label = L("Hole coef 2");
+    def->tooltip = L("Circle compensation of holes: diameter coefficient, in mm per mm of diameter. Radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values. Positive corrections make holes bigger.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("hole_coef_3", coFloats);
+    def->label = L("Hole coef 3");
+    def->tooltip = L("Circle compensation of holes: constant term. Radial correction = coef 1 x circle compensation speed + coef 2 x diameter (mm) + coef 3, limited to the min and max values. Positive corrections make holes bigger.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 0 });
+
+    def = this->add("counter_limit_min", coFloats);
+    def->label = L("Contour limit min");
+    def->tooltip = L("Lowest radial correction applied to circular contours.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { -0.5 });
+
+    def = this->add("counter_limit_max", coFloats);
+    def->label = L("Contour limit max");
+    def->tooltip = L("Highest radial correction applied to circular contours.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 0.5 });
+
+    def = this->add("hole_limit_min", coFloats);
+    def->label = L("Hole limit min");
+    def->tooltip = L("Lowest radial correction applied to circular holes.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { -0.5 });
+
+    def = this->add("hole_limit_max", coFloats);
+    def->label = L("Hole limit max");
+    def->tooltip = L("Highest radial correction applied to circular holes.");
+    def->sidetext = L("mm");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 0.5 });
+
+    def = this->add("diameter_limit", coFloats);
+    def->label = L("Diameter limit");
+    def->tooltip = L("Only circular holes and contours up to this diameter are compensated.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloats { 50 });
+
     def = this->add("filament_tower_interface_purge_volume", coFloats);
     def->label = L("Interface layer purge length");
     def->tooltip = L("Purge length for prime tower interface layer (where different materials meet).");
@@ -8624,6 +8717,25 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Quality");
     def->tooltip = L("Contours of objects will expand or contract in the XY plane by the set value. Positive values make contours bigger and negative values make contours smaller. This function is used to adjust sizes slightly when objects have assembly issues.");
     def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
+    def = this->add("enable_circle_compensation", coBool);
+    def->label = L("Auto circle contour-hole compensation");
+    def->category = L("Quality");
+    def->tooltip = L("Correct the diameter of circular holes and circular contours (cylinders) up to the filament's diameter "
+                     "limit, using the circle compensation coefficients of the outer wall filament. Holes and contours are "
+                     "detected per layer. The coefficients have to be calibrated for each filament; with all of them at 0 "
+                     "only the user customized offset is applied. It adds up with the X-Y hole and contour compensation.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("circle_compensation_manual_offset", coFloat);
+    def->label = L("User customized offset");
+    def->category = L("Quality");
+    def->tooltip = L("Extra diameter change for a tighter or looser fit of the compensated circles. Positive values tighten "
+                     "the fit (cylinders get bigger and holes smaller by this value in diameter), negative values loosen it.");
+    def->sidetext = L("mm");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0));
 
