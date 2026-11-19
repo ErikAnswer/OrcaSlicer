@@ -1899,6 +1899,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloats,              filament_tower_interface_pre_extrusion_dist))
     ((ConfigOptionFloats,              filament_tower_interface_pre_extrusion_length))
     ((ConfigOptionFloats,              filament_tower_ironing_area))
+    ((ConfigOptionStrings,             filament_prime_tower_speed_factor_curve))
     ((ConfigOptionFloats,              filament_tower_interface_purge_volume))
     ((ConfigOptionInts,                filament_tower_interface_print_temp))
     ((ConfigOptionFloats,              filament_cooling_final_speed))

@@ -564,6 +564,7 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             || opt_key == "filament_tower_interface_pre_extrusion_dist"
             || opt_key == "filament_tower_interface_pre_extrusion_length"
             || opt_key == "filament_tower_ironing_area"
+            || opt_key == "filament_prime_tower_speed_factor_curve"
             || opt_key == "filament_tower_interface_purge_volume"
             || opt_key == "filament_tower_interface_print_temp"
             || opt_key == "wipe_tower_bridging"
