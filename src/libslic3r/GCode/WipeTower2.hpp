@@ -272,7 +272,7 @@ private:
     float  m_side_scrape_wall_gap         = 0.2f;
     float  m_side_scrape_point_spacing    = 1.f;
     float  m_side_scrape_along_length     = 2.f;
-    unsigned int m_side_scrape_seq        = 0;
+    float  m_z_offset                     = 0.f;
     // Per plan layer, each toolchange's entry position (tower-local, un-shifted frame):
     // where the wall is cut open so the entry travel does not cross the printed wall.
     // Filled by compute_wall_skip_points() once the plan is final.

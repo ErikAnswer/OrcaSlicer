@@ -1097,6 +1097,7 @@ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& defau
     m_side_scrape_wall_gap(float(config.prime_tower_side_scrape_wall_gap.value)),
     m_side_scrape_point_spacing(float(config.prime_tower_side_scrape_point_spacing.value)),
     m_side_scrape_along_length(float(config.prime_tower_side_scrape_along_length.value)),
+    m_z_offset(float(config.z_offset.value)),
     m_enable_tower_interface_features(config.enable_tower_interface_features.value),
     m_enable_tower_interface_cooldown_during_tower(config.enable_tower_interface_cooldown_during_tower.value),
     m_wait_for_temp_on_wipe_tower(wait_for_temp_enabled(config))
@@ -1952,7 +1953,7 @@ void WipeTower2::toolchange_side_scrape(WipeTowerWriter2& writer)
     const Polygon wall = m_wall_type == int(wtwCone) ? generate_rectange_polygon(wt_box.ld, wt_box.ru) :
                                                        generate_support_rib_wall(writer, wt_box, 0., false, m_wall_type == int(wtwRib), false);
 
-    const unsigned int slot    = m_side_scrape_seq++;
+    const unsigned int slot    = unsigned(m_num_tool_changes);
     const bool         right   = slot % 2u == 0u;
     const float        outward = right ? 1.f : -1.f;
     const float        nominal = right ? m_wipe_tower_width : 0.f;
@@ -1991,11 +1992,11 @@ void WipeTower2::toolchange_side_scrape(WipeTowerWriter2& writer)
     // Z is resolved against the real tower height in GCode::append_tcr2(), which differs from the planned
     // one on a compacted tower.
     const std::string z_low = "{digits(max(toolchange_z - " + float_to_string_decimal_point(m_side_scrape_height, 3) + ", " +
-                              float_to_string_decimal_point(z_floor, 3) + "), 0, 3)}";
+                              float_to_string_decimal_point(z_floor + m_z_offset, 3) + "), 0, 3)}";
 
     writer.append("; CP TOOLCHANGE SIDE SCRAPE\n")
           .travel(Vec2f(start_x, along0), feedrate)
-          .append("G1 Z" + z_low + "\n")
+          .append("G1 Z" + z_low + " F" + std::to_string(int(std::lround(m_travel_speed * 60.f))) + "\n")
           .travel_z(Vec2f(scrape_x, along0), "{digits(toolchange_z, 0, 3)}", feedrate);
     if (std::abs(along1 - along0) > float(EPSILON))
         writer.travel(Vec2f(scrape_x, along1), feedrate);

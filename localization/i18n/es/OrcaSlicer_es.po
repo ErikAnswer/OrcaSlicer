@@ -21042,6 +21042,10 @@ msgstr "Límite del desplazamiento en vacío a lo largo de la pared lateral just
 msgid "Enable the side scrape after tool change to use this setting."
 msgstr "Active el rascado lateral tras el cambio de herramienta para usar este ajuste."
 
+# AI Translated
+msgid "Enable the prime tower, select wipe tower Type 2 and disable single extruder multimaterial mode on a non-Bambu, non-belt printer."
+msgstr "Active la torre de purga, seleccione el tipo de torre de purga «Tipo 2» y desactive el modo multimaterial de un solo extrusor en una impresora que no sea Bambu Lab ni de cinta."
+
 msgid "The extruder to use when printing perimeter of the wipe tower. Set to 0 to use the one that is available (non-soluble would be preferred)."
 msgstr "Extrusor usado para imprimir el perímetro de la torre de purga. Ajuste a 0 para usar el único disponible (no soluble preferentemente)."
 

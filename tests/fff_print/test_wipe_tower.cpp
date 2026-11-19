@@ -10,6 +10,7 @@
 #include <limits>
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
+#include <regex>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -29,6 +30,7 @@
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/GCode/ToolOrdering.hpp"
 #include "libslic3r/GCode/WipeTower.hpp"
+#include "libslic3r/GCode/WipeTower2.hpp"
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -1075,20 +1077,22 @@ TEST_CASE("Smooth timelapse prints each tower layer's wall once when a layer joi
     CHECK(count_joined_layers(print) > 0);
 }
 
-TEST_CASE("The Type 2 side scrape travels below the tower top without extruding, only when enabled", "[WipeTower]")
+// Two nozzles and two cubes: the short one has filament 2 on its outer walls, so every layer up to its
+// top changes tools, and the tall one has filament 2 on its top surface only, so above the short cube
+// the tower is sparse and, with sparse layers skipped, prints its last tool changes compacted far below
+// the object layer.
+static std::string slice_side_scrape(const char *tower_type, const char *wall_type, bool skip_sparse,
+                                     std::vector<ConfigBase::SetDeserializeItem> extra)
 {
-    // Two nozzles, filament 2 on the outer walls, so every layer changes tools.
-    const bool scrape        = GENERATE(false, true);
-    const double first_layer = 0.2;
     DynamicPrintConfig config = multifilament_config(2, {
-        { "outer_wall_filament_id",      2     },
         { "enable_prime_tower",          true  },
-        { "wipe_tower_type",             "type2" },
+        { "wipe_tower_type",             tower_type },
+        { "wipe_tower_wall_type",        wall_type },
+        { "wipe_tower_no_sparse_layers", skip_sparse },
         { "wipe_tower_x",                30    },
         { "wipe_tower_y",                30    },
         { "layer_height",                0.2   },
-        { "initial_layer_print_height",  first_layer },
-        { "prime_tower_side_scrape",     scrape },
+        { "initial_layer_print_height",  0.2   },
         { "gcode_comments",              true  },
         { "timelapse_type",              "0"   },
         { "enable_wrapping_detection",   false },
@@ -1103,49 +1107,162 @@ TEST_CASE("The Type 2 side scrape travels below the tower top without extruding,
         { "filament_map_mode",              "Manual" },
         { "filament_map",                   "1,2" } });
     size_flush_to_nozzles(config);
+    config.set_deserialize_strict(extra);
 
-    TriangleMesh part = make_cube(10., 10., 5.);
-    part.translate(120.f, 120.f, 0.f);
+    auto filaments = [](int walls, int top) {
+        return std::vector<ConfigBase::SetDeserializeItem>{
+            { "extruder", 1 }, { "outer_wall_filament_id", walls }, { "inner_wall_filament_id", 1 },
+            { "sparse_infill_filament_id", 1 }, { "internal_solid_filament_id", 1 },
+            { "top_surface_filament_id", top }, { "bottom_surface_filament_id", 1 } };
+    };
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides = { filaments(1, 2), filaments(2, 1) };
+
+    TriangleMesh tall = make_cube(10., 10., 8.);
+    tall.translate(120.f, 120.f, 0.f);
+    TriangleMesh low = make_cube(10., 10., 3.);
+    low.translate(150.f, 120.f, 0.f);
 
     Print print;
     Model model;
-    init_print({ std::move(part) }, print, model, config, nullptr, false);
+    init_print({ std::move(tall), std::move(low) }, print, model, config, &overrides, false);
     print.apply(model, config);
-    const std::string gcode = Slic3r::Test::gcode(print);
-    INFO((scrape ? "scrape on" : "scrape off"));
+    return Slic3r::Test::gcode(print);
+}
 
-    CHECK(gcode.find("toolchange_z") == std::string::npos);
-    if (!scrape) {
-        CHECK(gcode.find("SIDE SCRAPE") == std::string::npos);
-        return;
-    }
+struct SideScrape
+{
+    double marker_z = 0.; // Z when the scrape starts, after the tool change
+    double low_z    = 0.; // lowest Z of the descent
+    double low_x    = 0.; // X where the nozzle descends
+    double top_z    = 0.; // Z the diagonal rises to
+    double wipe_z   = -1.; // Z of the first tower extrusion after the scrape
+    bool   extrudes = false;
+};
 
-    size_t scrapes   = 0;
-    bool   in_scrape = false;
-    double top_z     = 0.;
-    double low_z     = 0.;
+static std::vector<SideScrape> side_scrapes(const std::string &gcode, double &tower_min_x, double &tower_max_x)
+{
+    std::vector<SideScrape> scrapes;
+    bool in_scrape = false, in_tower = false, waiting_wipe = false;
+    tower_min_x = std::numeric_limits<double>::max();
+    tower_max_x = std::numeric_limits<double>::lowest();
     GCodeReader parser;
     parser.parse_buffer(gcode, [&](GCodeReader &self, const GCodeReader::GCodeLine &line) {
         const std::string_view raw = line.raw();
+        if (raw.rfind(";TYPE:", 0) == 0 || raw.rfind("; FEATURE: ", 0) == 0)
+            in_tower = raw.find("Prime tower") != std::string_view::npos;
         if (raw.find("; CP TOOLCHANGE SIDE SCRAPE") != std::string_view::npos) {
-            ++scrapes;
+            SideScrape s;
+            s.marker_z = s.low_z = s.top_z = self.z();
+            scrapes.push_back(s);
             in_scrape = true;
-            top_z = low_z = self.z();
             return;
         }
-        if (!in_scrape)
-            return;
-        if (line.has_e() || raw.find("Force restore layer Z") != std::string_view::npos) {
-            INFO("scrape " << scrapes << " from Z " << top_z << " down to Z " << low_z);
-            CHECK_FALSE(line.extruding(self));
-            CHECK(low_z < top_z - EPSILON);
-            CHECK(low_z >= first_layer + 0.4 - EPSILON);
-            in_scrape = false;
-            return;
+        if (in_scrape) {
+            if (line.has_e() || raw.find("Force restore layer Z") != std::string_view::npos) {
+                in_scrape    = false;
+                waiting_wipe = true;
+            } else {
+                SideScrape &s = scrapes.back();
+                s.extrudes |= line.extruding(self);
+                if (line.has_z()) {
+                    if (line.z() < s.low_z) {
+                        s.low_z = line.z();
+                        s.low_x = line.has_x() ? line.x() : self.x();
+                    }
+                    s.top_z = line.z();
+                }
+                return;
+            }
         }
-        if (line.has_z())
-            low_z = std::min(low_z, double(line.z()));
+        if (in_tower && line.extruding(self) && (line.has_x() || line.has_y())) {
+            if (waiting_wipe) {
+                scrapes.back().wipe_z = self.z();
+                waiting_wipe          = false;
+            }
+            if (self.z() > 0.2 + EPSILON) {
+                tower_min_x = std::min(tower_min_x, double(line.has_x() ? line.x() : self.x()));
+                tower_max_x = std::max(tower_max_x, double(line.has_x() ? line.x() : self.x()));
+            }
+        }
     });
-    CHECK(scrapes > 0);
-    CHECK_FALSE(in_scrape);
+    return scrapes;
+}
+
+TEST_CASE("The Type 2 side scrape descends outside the tower without extruding", "[WipeTower]")
+{
+    const char *wall_type   = GENERATE("rectangle", "rib", "cone");
+    const bool  skip_sparse = GENERATE(false, true);
+    const std::string gcode = slice_side_scrape("type2", wall_type, skip_sparse, { { "prime_tower_side_scrape", true } });
+    INFO(wall_type << (skip_sparse ? ", sparse layers skipped" : ""));
+
+    CHECK(gcode.find("toolchange_z") == std::string::npos);
+    double tower_min_x = 0., tower_max_x = 0.;
+    const std::vector<SideScrape> scrapes = side_scrapes(gcode, tower_min_x, tower_max_x);
+    REQUIRE_FALSE(scrapes.empty());
+    bool left = false, right = false;
+    for (const SideScrape &s : scrapes) {
+        INFO("scrape from Z " << s.marker_z << " down to Z " << s.low_z << " at X " << s.low_x << ", up to Z " << s.top_z
+                              << ", next tower extrusion at Z " << s.wipe_z);
+        CHECK_FALSE(s.extrudes);
+        CHECK(s.low_z < s.top_z - EPSILON);
+        CHECK(s.low_z >= 0.2 + 0.4 - EPSILON);
+        CHECK(s.top_z <= s.marker_z + EPSILON);
+        // The diagonal ends at the height the tower is printed at, also on a compacted tower.
+        CHECK(std::abs(s.wipe_z - s.top_z) < 0.002);
+        if (std::string(wall_type) == "rectangle") {
+            CHECK((s.low_x < tower_min_x || s.low_x > tower_max_x));
+            left |= s.low_x < tower_min_x;
+            right |= s.low_x > tower_max_x;
+        }
+    }
+    if (std::string(wall_type) == "rectangle")
+        CHECK((left && right));
+}
+
+TEST_CASE("The side scrape changes nothing while it is off or the tower is Type 1", "[WipeTower]")
+{
+    const std::vector<ConfigBase::SetDeserializeItem> tuned = {
+        { "prime_tower_side_scrape_length", 5. }, { "prime_tower_side_scrape_height", 3. },
+        { "prime_tower_side_scrape_speed", 50. }, { "prime_tower_side_scrape_wall_gap", 1. },
+        { "prime_tower_side_scrape_point_spacing", 3. }, { "prime_tower_side_scrape_along_length", 4. } };
+    std::vector<ConfigBase::SetDeserializeItem> tuned_off = tuned;
+    tuned_off.push_back({ "prime_tower_side_scrape", false });
+
+    // The config block lists the tuned values and the header carries a timestamp and object ids.
+    auto moves = [](const std::string &gcode) {
+        return std::regex_replace(gcode.substr(0, gcode.find("; CONFIG_BLOCK_START")), std::regex("; generated by .*| id:\\d+"), "");
+    };
+    const std::string baseline = slice_side_scrape("type2", "rib", false, {});
+    CHECK(baseline.find("SIDE SCRAPE") == std::string::npos);
+    CHECK(moves(slice_side_scrape("type2", "rib", false, tuned_off)) == moves(baseline));
+
+    std::vector<ConfigBase::SetDeserializeItem> type1_on = tuned;
+    type1_on.push_back({ "prime_tower_side_scrape", true });
+    CHECK(slice_side_scrape("type1", "rib", false, type1_on).find("SIDE SCRAPE") == std::string::npos);
+}
+
+TEST_CASE("The tower keep-out grows by the side scrape reach only when a Type 2 scrape can run", "[WipeTower]")
+{
+    auto margin = [](std::vector<ConfigBase::SetDeserializeItem> items) {
+        DynamicPrintConfig dyn = DynamicPrintConfig::full_print_config();
+        dyn.set_deserialize_strict(items);
+        PrintConfig config;
+        config.apply(dyn, true);
+        return WipeTower2::side_scrape_margin(config);
+    };
+    const std::vector<ConfigBase::SetDeserializeItem> on = {
+        { "wipe_tower_type", "type2" }, { "single_extruder_multi_material", false }, { "nozzle_diameter", "0.4" },
+        { "prime_tower_side_scrape", true }, { "prime_tower_side_scrape_length", 2. }, { "prime_tower_side_scrape_wall_gap", 0.2 } };
+
+    CHECK_THAT(margin(on), Catch::Matchers::WithinAbs(2.6, 1e-6));
+    auto with = [&on](ConfigBase::SetDeserializeItem item) {
+        std::vector<ConfigBase::SetDeserializeItem> items = on;
+        items.push_back(item);
+        return items;
+    };
+    // A negative gap only pulls the end of the diagonal in; the descent still starts outside the wall.
+    CHECK_THAT(margin(with({ "prime_tower_side_scrape_wall_gap", -1. })), Catch::Matchers::WithinAbs(2.4, 1e-6));
+    CHECK(margin(with({ "prime_tower_side_scrape", false })) == 0.);
+    CHECK(margin(with({ "wipe_tower_type", "type1" })) == 0.);
+    CHECK(margin(with({ "single_extruder_multi_material", true })) == 0.);
 }
