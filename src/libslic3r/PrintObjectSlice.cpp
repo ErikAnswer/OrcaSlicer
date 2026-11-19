@@ -1559,6 +1559,8 @@ void PrintObject::slice_volumes()
                             }
                         }
 	                }
+	                if (this->config().enable_circle_compensation)
+	                    layer->apply_circle_compensation();
 	                // Merge all regions' slices to get islands, chain them by a shortest path.
 	                layer->make_slices();
 	            }

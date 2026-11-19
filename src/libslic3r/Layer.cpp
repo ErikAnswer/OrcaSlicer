@@ -53,6 +53,12 @@ LayerRegion* Layer::add_region(const PrintRegion *print_region)
 }
 
 // merge all regions' slices to get islands
+void Layer::apply_circle_compensation()
+{
+    for (LayerRegion *layerm : m_regions)
+        layerm->apply_circle_compensation();
+}
+
 void Layer::make_slices()
 {
     ExPolygons slices;

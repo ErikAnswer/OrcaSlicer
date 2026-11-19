@@ -1295,6 +1295,8 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, in
     toggle_line("only_one_wall_top", has_top_shell_layers, -1, top_shell_layers_reason);
     toggle_line("min_width_top_surface", (has_top_shell_layers && config->opt_bool("only_one_wall_top")) || ((config->opt_float("min_length_factor") > 0.5f) && have_arachne), -1, _L("Enable only one wall on top surfaces with top shell layers, or use Arachne with a minimum wall length factor above 0.5.")); // 0.5 is default value
 
+    toggle_line("circle_compensation_manual_offset", config->opt_bool("enable_circle_compensation"), -1,
+                _L("Enable auto circle contour-hole compensation to use this setting."));
     for (auto el : { "hole_to_polyhole_threshold", "hole_to_polyhole_twisted", "hole_to_polyhole_max_edges" })
         toggle_line(el, config->opt_bool("hole_to_polyhole"), -1, _L("Enable converting holes to polyholes to use this setting."));
 

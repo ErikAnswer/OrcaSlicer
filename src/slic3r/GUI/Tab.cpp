@@ -3091,6 +3091,8 @@ void TabPrint::build()
         optgroup->append_single_option_line("enable_arc_fitting", "quality_settings_precision#arc-fitting");
         optgroup->append_single_option_line("xy_hole_compensation", "quality_settings_precision#x-y-compensation");
         optgroup->append_single_option_line("xy_contour_compensation", "quality_settings_precision#x-y-compensation");
+        optgroup->append_single_option_line("enable_circle_compensation");
+        optgroup->append_single_option_line("circle_compensation_manual_offset");
         optgroup->append_single_option_line("elefant_foot_compensation", "quality_settings_precision#elephant-foot-compensation");
         optgroup->append_single_option_line("elefant_foot_layers_density", "quality_settings_precision#elephant-foot-compensation-density");
         optgroup->append_single_option_line("elefant_foot_compensation_layers", "quality_settings_precision#elephant-foot-compensation");
@@ -4966,6 +4968,20 @@ void TabFilament::build()
         optgroup = page->new_optgroup(L("Volumetric speed limitation"), L"param_volumetric_speed");
         optgroup->append_single_option_line("filament_adaptive_volumetric_speed", "material_volumetric_speed_limitation#adaptive-volumetric-speed", 0);
         optgroup->append_single_option_line("filament_max_volumetric_speed", "material_volumetric_speed_limitation#max-volumetric-speed", 0);
+
+        optgroup = page->new_optgroup(L("Circle compensation"), L"param_precision");
+        optgroup->append_single_option_line("circle_compensation_speed", "", 0);
+        optgroup->append_single_option_line("counter_coef_1", "", 0);
+        optgroup->append_single_option_line("counter_coef_2", "", 0);
+        optgroup->append_single_option_line("counter_coef_3", "", 0);
+        optgroup->append_single_option_line("hole_coef_1", "", 0);
+        optgroup->append_single_option_line("hole_coef_2", "", 0);
+        optgroup->append_single_option_line("hole_coef_3", "", 0);
+        optgroup->append_single_option_line("counter_limit_min", "", 0);
+        optgroup->append_single_option_line("counter_limit_max", "", 0);
+        optgroup->append_single_option_line("hole_limit_min", "", 0);
+        optgroup->append_single_option_line("hole_limit_max", "", 0);
+        optgroup->append_single_option_line("diameter_limit", "", 0);
 
         //line = { "", "" };
         //line.full_width = 1;

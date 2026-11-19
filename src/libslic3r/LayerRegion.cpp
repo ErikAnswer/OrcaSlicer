@@ -16,6 +16,7 @@
 #include "PrintConfig.hpp"
 #include "Surface.hpp"
 #include "BoundingBox.hpp"
+#include "CircleCompensation.hpp"
 #include "SVG.hpp"
 #include "Algorithm/RegionExpansion.hpp"
 #include "libslic3r.h"
@@ -961,6 +962,16 @@ void LayerRegion::process_external_surfaces(const Layer *lower_layer, const Poly
 #endif /* SLIC3R_DEBUG_SLICE_PROCESSING */
 }
 #endif
+
+void LayerRegion::apply_circle_compensation()
+{
+    const PrintObject &object        = *this->layer()->object();
+    const unsigned int wall_filament = this->region().extruder(frExternalPerimeter);
+    const CircleCompensationParams params = CircleCompensationParams::from_config(
+        object.print()->config(), wall_filament > 0 ? wall_filament - 1 : 0, object.config().circle_compensation_manual_offset.value);
+    for (Surface &surface : this->slices.surfaces)
+        surface.expolygon = compensate_circles(surface.expolygon, params);
+}
 
 void LayerRegion::prepare_fill_surfaces()
 {

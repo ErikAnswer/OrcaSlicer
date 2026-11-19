@@ -95,6 +95,7 @@ public:
 
     void    slices_to_fill_surfaces_clipped();
     void    prepare_fill_surfaces();
+    void    apply_circle_compensation();
     //BBS
     void    make_perimeters(const SurfaceCollection &slices, const LayerRegionPtrs &compatible_regions, SurfaceCollection* fill_surfaces, ExPolygons* fill_no_overlap);
     void    process_external_surfaces(const Layer *lower_layer, const Polygons *lower_layer_covered);
@@ -186,6 +187,7 @@ public:
     // Test whether whether there are any slices assigned to this layer.
     bool                    empty() const;
     void                    make_slices();
+    void                    apply_circle_compensation();
     // Backup and restore raw sliced regions if needed.
     //FIXME Review whether not to simplify the code by keeping the raw_slices all the time.
     void                    backup_untyped_slices();
