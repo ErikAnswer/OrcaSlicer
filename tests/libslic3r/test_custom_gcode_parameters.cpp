@@ -65,6 +65,32 @@ TEST_CASE("A custom parameter that is not defined stops the expansion with its o
     CHECK_THROWS_WITH(parser.process("{custom_parameter_filament_chamber}", 2), ContainsSubstring("not defined in the filament"));
     CHECK_THROWS_WITH(parser.process("[custom_parameter_filament_chamber]", 2), ContainsSubstring("not defined in the filament"));
     CHECK_THROWS_WITH(parser.process("[custom_parameter_filament_chamber_2]", 0), ContainsSubstring("not defined in the filament"));
+    CHECK_THROWS_WITH(parser.process("{custom_parameter_filament_chamber[-1]}", 0), ContainsSubstring("not defined in the filament"));
+}
+
+TEST_CASE("The legacy indexed syntax reads custom filament parameters with the same errors", "[CustomGCodeParameters]")
+{
+    PlaceholderParser parser = parser_with("", "", two_filaments);
+    parser.set("first", 0);
+    parser.set("second", 1);
+    parser.set("third", 2);
+
+    CHECK(parser.process("[custom_parameter_filament_chamber[second]]", 0) == "60.5");
+    CHECK(parser.process("[custom_parameter_filament_fan[first]]", 1) == "30");
+    CHECK_THROWS_WITH(parser.process("[custom_parameter_filament_fan[second]]", 0), ContainsSubstring("not defined in the filament"));
+    CHECK_THROWS_WITH(parser.process("[custom_parameter_filament_chamber[third]]", 0), ContainsSubstring("not defined in the filament"));
+    CHECK_THROWS_WITH(parser.process("[custom_parameter_filament_missing[first]]", 0), ContainsSubstring("custom parameter is not defined"));
+}
+
+TEST_CASE("is_nil tells whether a filament defines a custom parameter", "[CustomGCodeParameters]")
+{
+    const PlaceholderParser parser = parser_with("", "", two_filaments);
+
+    CHECK(parser.process("{if is_nil(custom_parameter_filament_fan)}none{else}{custom_parameter_filament_fan}{endif}", 0) == "30");
+    CHECK(parser.process("{if is_nil(custom_parameter_filament_fan)}none{else}{custom_parameter_filament_fan}{endif}", 1) == "none");
+    CHECK(parser.process("{if is_nil(custom_parameter_filament_fan[1])}none{else}set{endif}", 0) == "none");
+    CHECK(parser.process("{if is_nil(custom_parameter_filament_chamber[1])}none{else}set{endif}", 0) == "set");
+    CHECK(parser.process("{if is_nil(custom_parameter_filament_chamber[2])}none{else}set{endif}", 0) == "none");
     CHECK_THROWS_WITH(parser.process("{custom_parameter_filament_missing}", 0), ContainsSubstring("custom parameter is not defined"));
     CHECK_THROWS_WITH(parser.process("[custom_parameter_print_missing]", 0), ContainsSubstring("custom parameter is not defined"));
     CHECK_THROWS_WITH(parser.process("{custom_parameter_printer_missing + 1}", 0), ContainsSubstring("custom parameter is not defined"));

@@ -38316,26 +38316,35 @@ msgstr "Valores propios para el G-code personalizado, escritos como un objeto JS
 msgid "Your own values for the custom G-code, written as a JSON object of numbers and true/false values, for example {\"park_x\": 150, \"has_chamber_fan\": true}. Custom G-code reads a value as {custom_parameter_printer_park_x}. Slicing stops with an error when the G-code reads a parameter that is not defined."
 msgstr "Valores propios para el G-code personalizado, escritos como un objeto JSON de números y valores true/false, por ejemplo {\"park_x\": 150, \"has_chamber_fan\": true}. El G-code personalizado lee un valor con {custom_parameter_printer_park_x}. El laminado se detiene con un error si el G-code lee un parámetro que no está definido."
 
-msgid "The custom parameters of %1% must be a JSON object of numbers and true/false values, for example {\"chamber\": 45, \"soak\": true}."
-msgstr "Los parámetros personalizados en %1% deben ser un objeto JSON de números y valores true/false, por ejemplo {\"chamber\": 45, \"soak\": true}."
+msgid "The custom parameters of the process must be a JSON object of numbers and true/false values, for example {\"chamber\": 45, \"soak\": true}."
+msgstr "Los parámetros personalizados del proceso deben ser un objeto JSON de números y valores true/false, por ejemplo {\"chamber\": 45, \"soak\": true}."
 
-msgid "Custom parameters of %1%: the name \"%2%\" may only contain letters, digits and underscores, and must not start with a digit."
-msgstr "Parámetros personalizados en %1%: el nombre «%2%» solo puede llevar letras, dígitos y guiones bajos, y no puede empezar por un dígito."
+msgid "The custom parameters of the printer must be a JSON object of numbers and true/false values, for example {\"chamber\": 45, \"soak\": true}."
+msgstr "Los parámetros personalizados de la impresora deben ser un objeto JSON de números y valores true/false, por ejemplo {\"chamber\": 45, \"soak\": true}."
 
-msgid "Custom parameters of %1%: the value of \"%2%\" must be a number or true/false. Text values are not allowed."
-msgstr "Parámetros personalizados en %1%: el valor de «%2%» debe ser un número o true/false. No se admiten textos."
+msgid "The custom parameters of filament %1% must be a JSON object of numbers and true/false values, for example {\"chamber\": 45, \"soak\": true}."
+msgstr "Los parámetros personalizados del filamento %1% deben ser un objeto JSON de números y valores true/false, por ejemplo {\"chamber\": 45, \"soak\": true}."
+
+msgid "Custom parameters of the process: the name \"%1%\" may only contain letters, digits and underscores, and must not start with a digit."
+msgstr "Parámetros personalizados del proceso: el nombre «%1%» solo puede llevar letras, dígitos y guiones bajos, y no puede empezar por un dígito."
+
+msgid "Custom parameters of the printer: the name \"%1%\" may only contain letters, digits and underscores, and must not start with a digit."
+msgstr "Parámetros personalizados de la impresora: el nombre «%1%» solo puede llevar letras, dígitos y guiones bajos, y no puede empezar por un dígito."
+
+msgid "Custom parameters of filament %1%: the name \"%2%\" may only contain letters, digits and underscores, and must not start with a digit."
+msgstr "Parámetros personalizados del filamento %1%: el nombre «%2%» solo puede llevar letras, dígitos y guiones bajos, y no puede empezar por un dígito."
+
+msgid "Custom parameters of the process: the value of \"%1%\" must be a number or true/false. Text values are not allowed."
+msgstr "Parámetros personalizados del proceso: el valor de «%1%» debe ser un número o true/false. No se admiten textos."
+
+msgid "Custom parameters of the printer: the value of \"%1%\" must be a number or true/false. Text values are not allowed."
+msgstr "Parámetros personalizados de la impresora: el valor de «%1%» debe ser un número o true/false. No se admiten textos."
+
+msgid "Custom parameters of filament %1%: the value of \"%2%\" must be a number or true/false. Text values are not allowed."
+msgstr "Parámetros personalizados del filamento %1%: el valor de «%2%» debe ser un número o true/false. No se admiten textos."
 
 msgid "The custom parameter \"%1%\" is a number in some filaments and true/false in others. It must be of the same kind in every filament."
 msgstr "El parámetro personalizado «%1%» es un número en unos filamentos y true/false en otros. Debe ser del mismo tipo en todos los filamentos."
-
-msgid "the process"
-msgstr "el proceso"
-
-msgid "the printer"
-msgstr "la impresora"
-
-msgid "filament %1%"
-msgstr "el filamento %1%"
 
 msgid "This custom parameter is not defined. Add it to the custom parameters of the process, printer or filament profile"
 msgstr "Este parámetro personalizado no está definido. Añádelo a los parámetros personalizados del perfil de proceso, impresora o filamento"
