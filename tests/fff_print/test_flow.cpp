@@ -17,6 +17,7 @@
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/Layer.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/libslic3r.h"
 
 using namespace Slic3r;
@@ -189,4 +190,19 @@ TEST_CASE("First layer infill line width accepts a percentage of the nozzle diam
 
     CHECK_THAT(widths.first_layer_solid_infill, Catch::Matchers::WithinAbs(0.6, 1e-4));
     CHECK_THAT(widths.first_layer_wall,         Catch::Matchers::WithinAbs(0.4, 1e-4));
+}
+
+TEST_CASE("First layer infill line width of zero resolves to the first layer line width as a G-code variable", "[Flow]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "nozzle_diameter",                 "0.4" },
+        { "line_width",                      "0.45" },
+        { "initial_layer_line_width",        "0.6" },
+        { "initial_layer_infill_line_width", "0" },
+    });
+    CHECK_THAT(Flow::extrusion_width("initial_layer_infill_line_width", config), Catch::Matchers::WithinAbs(0.6, 1e-4));
+
+    config.set_deserialize_strict({ { "initial_layer_infill_line_width", "0.8" } });
+    CHECK_THAT(Flow::extrusion_width("initial_layer_infill_line_width", config), Catch::Matchers::WithinAbs(0.8, 1e-4));
 }

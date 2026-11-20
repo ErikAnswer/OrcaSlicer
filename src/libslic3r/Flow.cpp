@@ -106,6 +106,12 @@ double Flow::extrusion_width(const std::string& opt_key, const ConfigOptionFloat
 	}
 #endif
 
+    if (opt_key == "initial_layer_infill_line_width" && opt->value == 0.) {
+        opt = config.option<ConfigOptionFloatOrPercent>("initial_layer_line_width");
+        if (opt == nullptr)
+            throw_on_missing_variable(opt_key, "initial_layer_line_width");
+    }
+
 	if (opt->value == 0.) {
 		// The role specific extrusion width value was set to zero, try the role non-specific extrusion width.
 		opt = config.option<ConfigOptionFloatOrPercent>("line_width");
