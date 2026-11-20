@@ -10473,7 +10473,8 @@ std::string GCode::_encode_label_ids_to_base64(std::vector<size_t> ids)
 
 std::optional<GCode::HeightSlowdown> GCode::height_slowdown(ExtrusionRole role) const
 {
-    if (m_layer == nullptr || this->on_first_layer() || role <= erNone || role > erGapFill || !NOZZLE_CONFIG(enable_height_slowdown))
+    if (m_layer == nullptr || m_config.belt_printer.value || this->on_first_layer() || role <= erNone || role > erGapFill ||
+        !NOZZLE_CONFIG(enable_height_slowdown))
         return std::nullopt;
     const double start_height = NOZZLE_CONFIG(slowdown_start_height);
     const double end_height   = NOZZLE_CONFIG(slowdown_end_height);

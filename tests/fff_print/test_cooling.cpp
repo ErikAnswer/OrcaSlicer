@@ -306,16 +306,28 @@ TEST_CASE("Short travel acceleration next to outer walls", "[Cooling][GCode]")
     CHECK(enabled.find("ACCEL=1234") != std::string::npos);
 }
 
-std::vector<double> travel_feedrates_in_layers(const std::string &gcode, size_t first_layer, size_t last_layer)
+struct TravelMoves
 {
-    std::vector<double> out;
+    std::vector<double> feedrates;
+    std::vector<double> accelerations;
+};
+
+TravelMoves travels_in_layers(const std::string &gcode, size_t first_layer, size_t last_layer)
+{
+    TravelMoves out;
     std::istringstream input(gcode);
     std::string line;
     size_t layers_seen = 0;
     double feedrate = 0.;
+    double acceleration = 0.;
+    const std::string acceleration_command = "SET_VELOCITY_LIMIT ACCEL=";
     while (std::getline(input, line)) {
         if (line.rfind(";TEST_LAYER=", 0) == 0) {
             ++layers_seen;
+            continue;
+        }
+        if (line.rfind(acceleration_command, 0) == 0) {
+            acceleration = std::stod(line.substr(acceleration_command.size()));
             continue;
         }
         if (line.rfind("G1 ", 0) != 0)
@@ -332,8 +344,10 @@ std::vector<double> travel_feedrates_in_layers(const std::string &gcode, size_t 
             else if (word.front() == 'X' || word.front() == 'Y')
                 moves_xy = true;
         }
-        if (!has_e && moves_xy && layers_seen >= first_layer && layers_seen <= last_layer)
-            out.push_back(feedrate);
+        if (!has_e && moves_xy && layers_seen >= first_layer && layers_seen <= last_layer) {
+            out.feedrates.push_back(feedrate);
+            out.accelerations.push_back(acceleration);
+        }
     }
     return out;
 }
@@ -354,7 +368,7 @@ TEST_CASE("Slow down by height limits speed and acceleration above the starting 
     config.set_key_value("wipe", new ConfigOptionBools{false});
     config.set_key_value("slowdown_start_height", new ConfigOptionFloatsNullable{5.0});
     config.set_key_value("slowdown_end_height", new ConfigOptionFloatsNullable{10.0});
-    config.set_key_value("slowdown_start_speed", new ConfigOptionFloatsNullable{300.0});
+    config.set_key_value("slowdown_start_speed", new ConfigOptionFloatsNullable{100.0});
     config.set_key_value("slowdown_end_speed", new ConfigOptionFloatsNullable{20.0});
     config.set_key_value("slowdown_start_acc", new ConfigOptionFloatsNullable{100000.0});
     config.set_key_value("slowdown_end_acc", new ConfigOptionFloatsNullable{1234.0});
@@ -382,10 +396,25 @@ TEST_CASE("Slow down by height limits speed and acceleration above the starting 
     CHECK(disabled.find("ACCEL=1234") == std::string::npos);
     CHECK(enabled.find("ACCEL=1234") != std::string::npos);
 
-    const std::vector<double> disabled_top_travels = travel_feedrates_in_layers(disabled, 60, 90);
-    const std::vector<double> enabled_top_travels  = travel_feedrates_in_layers(enabled, 60, 90);
-    REQUIRE_FALSE(enabled_top_travels.empty());
-    CHECK(std::any_of(disabled_top_travels.begin(), disabled_top_travels.end(), [&](double f) { return f > end_feedrate + 1.; }));
-    CHECK(std::all_of(enabled_top_travels.begin(), enabled_top_travels.end(), [&](double f) { return f < end_feedrate + 1.; }));
-    CHECK(travel_feedrates_in_layers(disabled, 5, 20) == travel_feedrates_in_layers(enabled, 5, 20));
+    const TravelMoves disabled_top_travels = travels_in_layers(disabled, 60, 90);
+    const TravelMoves enabled_top_travels  = travels_in_layers(enabled, 60, 90);
+    REQUIRE_FALSE(enabled_top_travels.feedrates.empty());
+    CHECK(std::any_of(disabled_top_travels.feedrates.begin(), disabled_top_travels.feedrates.end(),
+                      [&](double f) { return f > end_feedrate + 1.; }));
+    CHECK(std::all_of(enabled_top_travels.feedrates.begin(), enabled_top_travels.feedrates.end(),
+                      [&](double f) { return f < end_feedrate + 1.; }));
+    CHECK(std::any_of(disabled_top_travels.accelerations.begin(), disabled_top_travels.accelerations.end(),
+                      [](double a) { return a > 1234.5; }));
+    CHECK(std::all_of(enabled_top_travels.accelerations.begin(), enabled_top_travels.accelerations.end(),
+                      [](double a) { return a < 1234.5; }));
+    CHECK(travels_in_layers(disabled, 5, 20).feedrates == travels_in_layers(enabled, 5, 20).feedrates);
+
+    const double              ramp_feedrate_at_7_mm = 70.0 * 60.0;
+    const double              ramp_feedrate_at_8_mm = 46.0 * 60.0;
+    const std::vector<double> enabled_ramp          = all_feedrates(extrusion_feedrates_in_layers(enabled, 36, 39));
+    const std::vector<double> ramp_travels          = travels_in_layers(enabled, 36, 39).feedrates;
+    REQUIRE_FALSE(ramp_travels.empty());
+    CHECK(std::all_of(enabled_ramp.begin(), enabled_ramp.end(), [&](double f) { return f < ramp_feedrate_at_7_mm + 1.; }));
+    CHECK(std::all_of(ramp_travels.begin(), ramp_travels.end(),
+                      [&](double f) { return f < ramp_feedrate_at_7_mm + 1. && f > ramp_feedrate_at_8_mm - 1.; }));
 }

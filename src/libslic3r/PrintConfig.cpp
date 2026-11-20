@@ -2354,7 +2354,8 @@ void PrintConfigDef::init_fff_params()
                      "values, which then hold for the rest of the print.\n\n"
                      "The limits apply to walls, infill, bridges and gap fill and to the travel moves that lead to them, not "
                      "to the first layer, skirt, brim, supports or prime tower. They only lower speeds and accelerations, "
-                     "never raise them. The acceleration limit needs the normal printing acceleration to be above zero.");
+                     "never raise them. The acceleration limit needs the normal printing acceleration to be above zero. "
+                     "Belt printers are not slowed down.");
     def->mode = comAdvanced;
     def->nullable = true;
     def->set_default_value(new ConfigOptionBoolsNullable{false});
