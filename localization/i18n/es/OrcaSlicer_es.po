@@ -38414,3 +38414,18 @@ msgstr ""
 "Deja que los soportes se acerquen más a las paredes del objeto, para que un voladizo quede apoyado hasta su borde y su cara inferior salga más limpia.\n"
 "\n"
 "Activado, la distancia soporte/objeto X-Y se reduce hasta la distancia Z superior, pero nunca por debajo de 0,2 mm. Nunca se aumenta, y la primera capa conserva su propia separación. Desactivado, los soportes mantienen siempre la distancia soporte/objeto X-Y."
+
+msgid "Seam away from overhangs"
+msgstr "Costura lejos de voladizos"
+
+msgid ""
+"Keep the seam away from overhangs, where it leaves more visible marks, especially with materials such as ASA.\n"
+"\n"
+"When enabled, the less a point of the outer wall is supported by the layer below, the less likely the seam is placed on it or within 1 mm of it. Steep overhangs are avoided even when this is disabled. It has no effect with the random seam position."
+msgstr ""
+"Mantiene la costura lejos de los voladizos, donde deja marcas más visibles, sobre todo con materiales como el ASA.\n"
+"\n"
+"Activado, cuanto menos apoyado esté un punto de la pared exterior en la capa inferior, menos probable es que la costura caiga en él o a menos de 1 mm. Los voladizos pronunciados se evitan aunque esté desactivado. No tiene efecto con la posición de costura aleatoria."
+
+msgid "Set wall loops above zero and a seam position other than random to use this setting."
+msgstr "Pon al menos un bucle de pared y una posición de costura que no sea aleatoria para usar este ajuste."

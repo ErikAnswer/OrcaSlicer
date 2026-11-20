@@ -6771,6 +6771,15 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("This option causes the inner seams to be shifted backwards based on their depth, forming a zigzag pattern.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("seam_placement_away_from_overhangs", coBool);
+    def->label = L("Seam away from overhangs");
+    def->category = L("Quality");
+    def->tooltip = L("Keep the seam away from overhangs, where it leaves more visible marks, especially with materials such as ASA.\n\n"
+                     "When enabled, the less a point of the outer wall is supported by the layer below, the less likely the seam is placed on it or within 1 mm of it. "
+                     "Steep overhangs are avoided even when this is disabled. It has no effect with the random seam position.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
     
     def = this->add("seam_gap", coFloatOrPercent);
     def->label = L("Seam gap");

@@ -73,7 +73,7 @@ struct SeamCandidate {
   SeamCandidate(const Vec3f &pos, Perimeter &perimeter,
                 float local_ccw_angle,
                 EnforcedBlockedSeamPoint type) :
-                                                 position(pos), perimeter(perimeter), visibility(0.0f), overhang(0.0f), embedded_distance(0.0f), local_ccw_angle(
+                                                 position(pos), perimeter(perimeter), visibility(0.0f), overhang(0.0f), overhang_proximity(0.0f), embedded_distance(0.0f), local_ccw_angle(
                                                                                                                                                      local_ccw_angle), type(type), central_enforcer(false) {
   }
   const Vec3f position;
@@ -81,6 +81,8 @@ struct SeamCandidate {
   Perimeter &perimeter;
   float visibility;
   float overhang;
+  // Penalty for lying on or next to a weakly supported stretch of the loop; stays 0 unless seam_placement_away_from_overhangs is on.
+  float overhang_proximity;
   float unsupported_dist;
   // distance inside the merged layer regions, for detecting perimeter points which are hidden indside the print (e.g. multimaterial join)
   // Negative sign means inside the print, comes from EdgeGrid structure
@@ -103,6 +105,9 @@ struct SeamCandidateCoordinateFunctor {
 // Seam alignment helpers, declared here for the tests.
 float enforced_corner_influence(const std::vector<SeamCandidate> &points, size_t index, float protect, float fade_end);
 Vec3f place_on_loop(const std::vector<SeamCandidate> &points, size_t index, const Vec3f &target);
+// Raises overhang_proximity of every candidate to the largest overhang degree found within `reach` along its loop,
+// faded with the distance. overhang_degrees holds one value per candidate.
+void spread_overhang_proximity(std::vector<SeamCandidate> &points, const std::vector<float> &overhang_degrees, float reach);
 } // namespace SeamPlacerImpl
 
 struct PrintObjectSeamData
@@ -152,6 +157,8 @@ public:
   // When searching for seam clusters for alignment:
   // following value describes, how much worse score can point have and still be picked into seam cluster instead of original seam point on the same layer
   static constexpr float seam_align_score_tolerance = 0.3f;
+  // Distance along the loop, in mm, over which an overhang keeps the seam away when seam_placement_away_from_overhangs is on.
+  static constexpr float overhang_proximity_reach = 1.0f;
   // seam_align_tolerable_dist_factor - how far to search for seam from current position, final dist is seam_align_tolerable_dist_factor * flow_width
   static constexpr float seam_align_tolerable_dist_factor = 4.0f;
   // minimum number of seams needed in cluster to make alignment happen

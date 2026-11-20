@@ -1213,10 +1213,10 @@ struct SeamComparator {
     // the penalites are kept close to range [0-1.x] however, it should not be relied upon
     float penalty_a = a.overhang + a.visibility +
                       angle_importance * compute_angle_penalty(a.local_ccw_angle)
-                      + distance_penalty_a;
+                      + distance_penalty_a + a.overhang_proximity;
     float penalty_b = b.overhang + b.visibility +
                       angle_importance * compute_angle_penalty(b.local_ccw_angle)
-                      + distance_penalty_b;
+                      + distance_penalty_b + b.overhang_proximity;
 
     return penalty_a < penalty_b;
   }
@@ -1263,9 +1263,9 @@ struct SeamComparator {
     }
 
     float penalty_a = a.overhang + a.visibility
-                      + angle_importance * compute_angle_penalty(a.local_ccw_angle);
+                      + angle_importance * compute_angle_penalty(a.local_ccw_angle) + a.overhang_proximity;
     float penalty_b = b.overhang + b.visibility +
-                      angle_importance * compute_angle_penalty(b.local_ccw_angle);
+                      angle_importance * compute_angle_penalty(b.local_ccw_angle) + b.overhang_proximity;
 
     return penalty_a <= penalty_b || penalty_a - penalty_b < SeamPlacer::seam_align_score_tolerance;
   }
@@ -1451,6 +1451,41 @@ constexpr float enforced_corner_angle_min = 15.0f * float(PI) / 180.0f;
 constexpr float enforced_corner_angle_max = 30.0f * float(PI) / 180.0f;
 // The corner influence fades out along the perimeter between R0 and this multiple of R0.
 constexpr float enforced_corner_fade_factor = 2.0f;
+
+void spread_overhang_proximity(std::vector<SeamCandidate> &points, const std::vector<float> &overhang_degrees, float reach) {
+  const auto raise = [&points](size_t index, float value) {
+    points[index].overhang_proximity = std::max(points[index].overhang_proximity, value);
+  };
+  for (size_t i = 0; i < points.size(); ++i) {
+    const float degree = overhang_degrees[i];
+    const size_t start = points[i].perimeter.start_index;
+    const size_t end = points[i].perimeter.end_index;
+    if (degree <= 0.0f || end - start <= 1) {
+      continue;
+    }
+    raise(i, degree);
+    for (const bool forward : { false, true }) {
+      float distance = 0.0f;
+      size_t index = i;
+      while (true) {
+        const size_t previous = index;
+        if (forward) {
+          index = index + 1 == end ? start : index + 1;
+        } else {
+          index = index == start ? end - 1 : index - 1;
+        }
+        if (index == i) {
+          break;
+        }
+        distance += (points[index].position.head<2>() - points[previous].position.head<2>()).norm();
+        if (distance > reach) {
+          break;
+        }
+        raise(index, degree * gauss(distance, 0.0f, 1.0f, 10.0f));
+      }
+    }
+  }
+}
 
 float smoothstep01(float x) {
   x = std::clamp(x, 0.0f, 1.0f);
@@ -1685,8 +1720,9 @@ void SeamPlacer::calculate_overhangs_and_layer_embedding(const PrintObject *po) 
   using PerimeterDistancer = AABBTreeLines::LinesDistancer<Linef>;
 
   std::vector<PrintObjectSeamData::LayerSeams> &layers = m_seam_per_object[po].layers;
+  const bool away_from_overhangs = po->config().seam_placement_away_from_overhangs.value;
   tbb::parallel_for(tbb::blocked_range<size_t>(0, layers.size()),
-                    [po, &layers](tbb::blocked_range<size_t> r) {
+                    [po, &layers, away_from_overhangs](tbb::blocked_range<size_t> r) {
                       std::unique_ptr<PerimeterDistancer> prev_layer_distancer;
                       if (r.begin() > 0) { // previous layer exists
                         prev_layer_distancer = std::make_unique<PerimeterDistancer>(to_unscaled_linesf(po->layers()[r.begin() - 1]->lslices));
@@ -1704,7 +1740,9 @@ void SeamPlacer::calculate_overhangs_and_layer_embedding(const PrintObject *po) 
                             to_unscaled_linesf(po->layers()[layer_idx]->lslices));
 
                         auto& layer_seams = layers[layer_idx];
-                        for (SeamCandidate &perimeter_point : layer_seams.points) {
+                        std::vector<float> overhang_degrees(away_from_overhangs ? layer_seams.points.size() : 0, 0.0f);
+                        for (size_t point_idx = 0; point_idx < layer_seams.points.size(); ++point_idx) {
+                          SeamCandidate &perimeter_point = layer_seams.points[point_idx];
                           Vec2f point = Vec2f { perimeter_point.position.head<2>() };
                           if (prev_layer_distancer.get() != nullptr) {
                             const auto _dist = prev_layer_distancer->distance_from_lines<true>(point.cast<double>());
@@ -1715,12 +1753,20 @@ void SeamPlacer::calculate_overhangs_and_layer_embedding(const PrintObject *po) 
                             perimeter_point.overhang =
                                 perimeter_point.overhang < 0.0f ? 0.0f : perimeter_point.overhang;
                             perimeter_point.unsupported_dist = _dist + 0.4f * perimeter_point.perimeter.flow_width;
+                            if (away_from_overhangs && perimeter_point.perimeter.flow_width > 0.0f) {
+                              overhang_degrees[point_idx] = std::max(0.0f,
+                                  float(_dist + 0.6f * perimeter_point.perimeter.flow_width) / perimeter_point.perimeter.flow_width);
+                            }
                           }
 
                           if (should_compute_layer_embedding) { // search for embedded perimeter points (points hidden inside the print ,e.g. multimaterial join, best position for seam)
                             perimeter_point.embedded_distance = current_layer_distancer->distance_from_lines<true>(point.cast<double>())
                                                                 + 0.65f * perimeter_point.perimeter.flow_width;
                           }
+                        }
+
+                        if (away_from_overhangs) {
+                          spread_overhang_proximity(layer_seams.points, overhang_degrees, SeamPlacer::overhang_proximity_reach);
                         }
 
                         prev_layer_distancer.swap(current_layer_distancer);
