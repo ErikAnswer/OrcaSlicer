@@ -38,9 +38,12 @@ struct PipelineFixture {
     Print print;
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
 
-    explicit PipelineFixture(bool trapezoid = false, float height = 0.4f)
+    explicit PipelineFixture(bool trapezoid = false, float height = 0.4f, float lean = 0.0f)
     {
         auto mesh = its_make_cube(20, 20, height);
+        // The X-max wall leans outward by `lean` over the height of the cube.
+        for (auto &vertex : mesh.vertices)
+            if (vertex.z() == height && vertex.x() == 20.0f) vertex.x() += lean;
         if (trapezoid) {
             // Opposite painted sides have deliberately different lengths: 20 mm and 6 mm.
             for (auto &vertex : mesh.vertices)
@@ -1537,4 +1540,86 @@ TEST_CASE("Seam extraction preserves unknown boundary roles for open extrusion p
     const auto &perimeters = placer.m_seam_per_object.at(&object).layers.front().perimeters;
     REQUIRE(perimeters.size() == 1);
     CHECK(perimeters.front().contour_reliable == !open);
+}
+
+TEST_CASE("Overhang proximity spreads along the loop and fades with the distance", "[SeamPlacer]")
+{
+    // Candidates every 0.25 mm along the bottom of a 5 x 5 mm loop; only the one at x = 2.5 is weakly supported.
+    std::vector<Vec2d> xy;
+    for (int i = 0; i <= 20; ++i)
+        xy.emplace_back(0.25 * i, 0.0);
+    xy.emplace_back(5.0, 5.0);
+    xy.emplace_back(0.0, 5.0);
+    SeamPlacerImpl::Perimeter perimeter;
+    auto points = loop_candidates(perimeter, xy);
+    std::vector<float> degrees(points.size(), 0.0f);
+    degrees[10] = 0.8f;
+    SeamPlacerImpl::spread_overhang_proximity(points, degrees, 1.0f);
+
+    using Catch::Matchers::WithinAbs;
+    CHECK_THAT(double(points[10].overhang_proximity), WithinAbs(0.8, 1e-5));
+    for (size_t step = 1; step <= 4; ++step) {
+        CAPTURE(step);
+        CHECK(points[10 + step].overhang_proximity < points[10 + step - 1].overhang_proximity);
+        CHECK(points[10 + step].overhang_proximity > 0.0f);
+        CHECK_THAT(double(points[10 - step].overhang_proximity), WithinAbs(double(points[10 + step].overhang_proximity), 1e-5));
+    }
+    // Beyond the 1 mm reach nothing changes.
+    CHECK(points[15].overhang_proximity == 0.0f);
+    CHECK(points[5].overhang_proximity == 0.0f);
+    CHECK(points[21].overhang_proximity == 0.0f);
+
+    // A weaker neighbour never lowers what a stronger overhang left, in either processing order.
+    degrees[9] = 0.1f;
+    degrees[11] = 0.1f;
+    for (auto &point : points)
+        point.overhang_proximity = 0.0f;
+    SeamPlacerImpl::spread_overhang_proximity(points, degrees, 1.0f);
+    CHECK_THAT(double(points[10].overhang_proximity), WithinAbs(0.8, 1e-5));
+    CHECK(points[9].overhang_proximity > 0.1f);
+    CHECK(points[11].overhang_proximity > 0.1f);
+}
+
+TEST_CASE("Seam away from overhangs moves the seam off a leaning wall and is neutral when disabled", "[SeamPlacer]")
+{
+    const bool enabled = GENERATE(false, true);
+    CAPTURE(enabled);
+    // 20 layers of 0.2 mm; the X-max wall leans outward 0.08 mm per layer, well under the 45 degree overhang
+    // threshold. Rear seams pick between the two rear corners, which differ only in how well they are supported.
+    PipelineFixture fixture(false, 4.0f, 1.6f);
+    if (enabled) {
+        fixture.config.set_deserialize_strict("seam_placement_away_from_overhangs", "1");
+        fixture.print.apply(fixture.model, fixture.config);
+    }
+    PrintObject &object = fixture.prepare();
+    REQUIRE(object.layers().size() == 20);
+    const auto outline = [&](size_t layer) {
+        const double x_max = 20.0 + 0.4 * (0.2 * double(layer) + 0.1) - 0.2;
+        return fixture.points_in_layer(object, {{0.2, 0.2}, {x_max, 0.2}, {x_max, 19.8}, {0.2, 19.8}});
+    };
+    set_loop_on_every_layer(object, outline);
+    SeamPlacer placer;
+    placer.init(fixture.print, [] {});
+    const auto &layers = placer.m_seam_per_object.at(&object).layers;
+    const auto seams = placed_seams(placer, object);
+
+    for (size_t i = 2; i < layers.size(); ++i) {
+        CAPTURE(i);
+        const Points corners = outline(i);
+        const double x_min = unscale(corners[0]).x();
+        const double x_max = unscale(corners[1]).x();
+        for (const auto &point : layers[i].points) {
+            const bool leaning = std::abs(double(point.position.x()) - x_max) < 1e-3;
+            CAPTURE(leaning);
+            CHECK(point.overhang == 0.0f); // Not an overhang for the existing avoidance.
+            if (! enabled)
+                CHECK(point.overhang_proximity == 0.0f);
+            else if (leaning)
+                CHECK(point.overhang_proximity > 0.25f);
+            else
+                CHECK(point.overhang_proximity < 0.2f);
+        }
+        if (enabled)
+            CHECK(seams[i].x() < 0.5 * (x_min + x_max));
+    }
 }
