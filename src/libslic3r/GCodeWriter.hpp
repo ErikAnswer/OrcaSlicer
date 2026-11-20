@@ -163,6 +163,7 @@ public:
     void set_is_first_layer(bool bval) { m_is_first_layer = bval; }
     GCodeFlavor get_gcode_flavor() const { return config.gcode_flavor; }
     void invalidate_acceleration() { m_last_acceleration = 0; m_last_travel_acceleration = 0; }
+    unsigned int travel_acceleration_in_effect() const { return supports_separate_travel_acceleration(this->config.gcode_flavor) ? m_last_travel_acceleration : m_last_acceleration; }
     void invalidate_jerk() { m_last_jerk = 0; }
 
     // Axis remap: permute/negate/reverse axes in G-code output.

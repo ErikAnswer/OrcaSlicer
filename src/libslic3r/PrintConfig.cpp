@@ -2346,6 +2346,81 @@ void PrintConfigDef::init_fff_params()
     def->nullable = true;
     def->set_default_value(new ConfigOptionFloatsNullable{0.0});
 
+    def = this->add("enable_height_slowdown", coBools);
+    def->label = L("Slow down by height");
+    def->category = L("Speed");
+    def->tooltip = L("Limit the speed and acceleration of the upper part of a print, for tall and slender parts that wobble "
+                     "near the top. From the starting height the limits go linearly from the starting values to the ending "
+                     "values, which then hold for the rest of the print.\n\n"
+                     "The limits apply to walls, infill, bridges and gap fill and to the travel moves that lead to them, not "
+                     "to the first layer, skirt, brim, supports or prime tower. They only lower speeds and accelerations, "
+                     "never raise them. The acceleration limit needs the normal printing acceleration to be above zero. "
+                     "Belt printers are not slowed down.");
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionBoolsNullable{false});
+
+    def = this->add("slowdown_start_height", coFloats);
+    def->label = L("Starting height");
+    def->category = L("Speed");
+    def->tooltip = L("Height above the bed from which the speed and acceleration limits apply.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsNullable{0.0});
+
+    def = this->add("slowdown_start_speed", coFloats);
+    def->label = L("Speed at starting height");
+    def->category = L("Speed");
+    def->tooltip = L("Maximum speed at the starting height.");
+    def->sidetext = L("mm/s");	// millimeters per second, CIS languages need translation
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsNullable{1000.0});
+
+    def = this->add("slowdown_start_acc", coFloats);
+    def->label = L("Acceleration at starting height");
+    def->category = L("Speed");
+    def->tooltip = L("Maximum acceleration at the starting height.");
+    def->sidetext = L(u8"mm/s²");	// millimeters per second per second, CIS languages need translation
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsNullable{100000.0});
+
+    def = this->add("slowdown_end_height", coFloats);
+    def->label = L("Ending height");
+    def->category = L("Speed");
+    def->tooltip = L("Height above the bed from which the ending speed and acceleration apply. It must be larger than the "
+                     "starting height, otherwise nothing is slowed down.");
+    def->sidetext = L("mm");	// millimeters, CIS languages need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsNullable{400.0});
+
+    def = this->add("slowdown_end_speed", coFloats);
+    def->label = L("Speed at ending height");
+    def->category = L("Speed");
+    def->tooltip = L("Maximum speed from the ending height up.");
+    def->sidetext = L("mm/s");	// millimeters per second, CIS languages need translation
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsNullable{1000.0});
+
+    def = this->add("slowdown_end_acc", coFloats);
+    def->label = L("Acceleration at ending height");
+    def->category = L("Speed");
+    def->tooltip = L("Maximum acceleration from the ending height up.");
+    def->sidetext = L(u8"mm/s²");	// millimeters per second per second, CIS languages need translation
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->nullable = true;
+    def->set_default_value(new ConfigOptionFloatsNullable{100000.0});
+
     def = this->add("initial_layer_travel_acceleration", coFloatsOrPercents);
     def->label = L("First layer travel");
     def->tooltip = L("Travel acceleration of first layer.\nThe percentage value is relative to Travel Acceleration.");
@@ -10410,6 +10485,13 @@ std::set<std::string> print_options_with_variant = {
     "bridge_acceleration",
     "travel_acceleration",
     "travel_short_distance_acceleration",
+    "enable_height_slowdown",
+    "slowdown_start_height",
+    "slowdown_start_speed",
+    "slowdown_start_acc",
+    "slowdown_end_height",
+    "slowdown_end_speed",
+    "slowdown_end_acc",
     "initial_layer_travel_acceleration",
     "initial_layer_acceleration",
     "outer_wall_acceleration",

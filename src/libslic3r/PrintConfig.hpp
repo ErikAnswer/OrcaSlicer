@@ -1425,6 +1425,13 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatsOrPercentsNullable, bridge_acceleration))
     ((ConfigOptionFloatsNullable,           travel_acceleration))
     ((ConfigOptionFloatsNullable,           travel_short_distance_acceleration))
+    ((ConfigOptionBoolsNullable,            enable_height_slowdown))
+    ((ConfigOptionFloatsNullable,           slowdown_start_height))
+    ((ConfigOptionFloatsNullable,           slowdown_start_speed))
+    ((ConfigOptionFloatsNullable,           slowdown_start_acc))
+    ((ConfigOptionFloatsNullable,           slowdown_end_height))
+    ((ConfigOptionFloatsNullable,           slowdown_end_speed))
+    ((ConfigOptionFloatsNullable,           slowdown_end_acc))
     ((ConfigOptionFloatsOrPercentsNullable, sparse_infill_acceleration))
     ((ConfigOptionFloatsOrPercentsNullable, internal_solid_infill_acceleration))
 
