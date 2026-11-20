@@ -306,6 +306,38 @@ TEST_CASE("Short travel acceleration next to outer walls", "[Cooling][GCode]")
     CHECK(enabled.find("ACCEL=1234") != std::string::npos);
 }
 
+std::vector<double> travel_feedrates_in_layers(const std::string &gcode, size_t first_layer, size_t last_layer)
+{
+    std::vector<double> out;
+    std::istringstream input(gcode);
+    std::string line;
+    size_t layers_seen = 0;
+    double feedrate = 0.;
+    while (std::getline(input, line)) {
+        if (line.rfind(";TEST_LAYER=", 0) == 0) {
+            ++layers_seen;
+            continue;
+        }
+        if (line.rfind("G1 ", 0) != 0)
+            continue;
+        std::istringstream words(line.substr(0, line.find(';')));
+        std::string word;
+        bool has_e = false;
+        bool moves_xy = false;
+        while (words >> word) {
+            if (word.front() == 'F')
+                feedrate = std::stod(word.substr(1));
+            else if (word.front() == 'E')
+                has_e = true;
+            else if (word.front() == 'X' || word.front() == 'Y')
+                moves_xy = true;
+        }
+        if (!has_e && moves_xy && layers_seen >= first_layer && layers_seen <= last_layer)
+            out.push_back(feedrate);
+    }
+    return out;
+}
+
 TEST_CASE("Slow down by height limits speed and acceleration above the starting height", "[Speed][GCode]")
 {
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
@@ -318,6 +350,8 @@ TEST_CASE("Slow down by height limits speed and acceleration above the starting 
     config.set_key_value("default_acceleration", new ConfigOptionFloatsNullable{5000.0});
     config.set_key_value("outer_wall_acceleration", new ConfigOptionFloatsNullable{3000.0});
     config.set_key_value("travel_acceleration", new ConfigOptionFloatsNullable{6000.0});
+    config.set_key_value("travel_speed", new ConfigOptionFloatsNullable{200.0});
+    config.set_key_value("wipe", new ConfigOptionBools{false});
     config.set_key_value("slowdown_start_height", new ConfigOptionFloatsNullable{5.0});
     config.set_key_value("slowdown_end_height", new ConfigOptionFloatsNullable{10.0});
     config.set_key_value("slowdown_start_speed", new ConfigOptionFloatsNullable{300.0});
@@ -347,4 +381,11 @@ TEST_CASE("Slow down by height limits speed and acceleration above the starting 
     CHECK(all_feedrates(extrusion_feedrates_in_layers(disabled, 5, 20)) == enabled_low);
     CHECK(disabled.find("ACCEL=1234") == std::string::npos);
     CHECK(enabled.find("ACCEL=1234") != std::string::npos);
+
+    const std::vector<double> disabled_top_travels = travel_feedrates_in_layers(disabled, 60, 90);
+    const std::vector<double> enabled_top_travels  = travel_feedrates_in_layers(enabled, 60, 90);
+    REQUIRE_FALSE(enabled_top_travels.empty());
+    CHECK(std::any_of(disabled_top_travels.begin(), disabled_top_travels.end(), [&](double f) { return f > end_feedrate + 1.; }));
+    CHECK(std::all_of(enabled_top_travels.begin(), enabled_top_travels.end(), [&](double f) { return f < end_feedrate + 1.; }));
+    CHECK(travel_feedrates_in_layers(disabled, 5, 20) == travel_feedrates_in_layers(enabled, 5, 20));
 }

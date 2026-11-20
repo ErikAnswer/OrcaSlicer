@@ -10618,6 +10618,8 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
     std::vector<double>                 travel_speed_before_slowdown;
     std::vector<double>                 travel_speed_z_before_slowdown;
     if (height_slowdown) {
+        if (acceleration_to_set == 0)
+            acceleration_to_set = m_writer.travel_acceleration_in_effect();
         if (acceleration_to_set > 0)
             acceleration_to_set = std::min(acceleration_to_set, (unsigned int) floor(height_slowdown->acceleration + 0.5));
         travel_speed_before_slowdown   = m_writer.config.travel_speed.values;
