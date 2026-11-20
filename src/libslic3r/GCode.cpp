@@ -4370,6 +4370,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             file.write_format("; support material extrusion width = %.2fmm\n", support_material_flow(first_object).width());
         if (print.config().initial_layer_line_width.value > 0)
             file.write_format("; first layer extrusion width = %.2fmm\n",   region.flow(*first_object, frPerimeter, initial_layer_print_height, true).width());
+        if (print.config().initial_layer_infill_line_width.value > 0)
+            file.write_format("; first layer infill extrusion width = %.2fmm\n", region.flow(*first_object, frSolidInfill, initial_layer_print_height, true).width());
         file.write_format("\n");
     }
 

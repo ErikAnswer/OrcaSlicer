@@ -51,7 +51,7 @@ static inline FlowRole opt_key_to_flow_role(const std::string &opt_key)
         return frPerimeter;
     else if (opt_key == "outer_wall_line_width")
         return frExternalPerimeter;
-    else if (opt_key == "sparse_infill_line_width")
+    else if (opt_key == "sparse_infill_line_width" || opt_key == "initial_layer_infill_line_width")
         return frInfill;
     else if (opt_key == "internal_solid_infill_line_width")
         return frSolidInfill;
@@ -105,6 +105,12 @@ double Flow::extrusion_width(const std::string& opt_key, const ConfigOptionFloat
     		throw_on_missing_variable(opt_key, "inner_wall_line_width");
 	}
 #endif
+
+    if (opt_key == "initial_layer_infill_line_width" && opt->value == 0.) {
+        opt = config.option<ConfigOptionFloatOrPercent>("initial_layer_line_width");
+        if (opt == nullptr)
+            throw_on_missing_variable(opt_key, "initial_layer_line_width");
+    }
 
 	if (opt->value == 0.) {
 		// The role specific extrusion width value was set to zero, try the role non-specific extrusion width.

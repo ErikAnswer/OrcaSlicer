@@ -8,8 +8,16 @@
 #include <catch2/catch_approx.hpp>
 #include "test_helpers.hpp" // get access to init_print, etc
 
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <string>
+
 #include "libslic3r/Config.hpp"
+#include "libslic3r/ExtrusionEntity.hpp"
+#include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/Flow.hpp"
+#include "libslic3r/Layer.hpp"
+#include "libslic3r/Print.hpp"
+#include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/libslic3r.h"
 
 using namespace Slic3r;
@@ -92,4 +100,109 @@ SCENARIO("Flow math for bridges", "[Flow]") {
             }
         }
     }
+}
+
+namespace {
+
+struct FirstLayerWidths
+{
+    double first_layer_wall;
+    double first_layer_outer_wall;
+    double first_layer_sparse_infill;
+    double first_layer_solid_infill;
+    double first_layer_top_surface;
+    double second_layer_solid_infill;
+    double first_layer_fill_mm3_per_mm;
+    std::string gcode;
+};
+
+FirstLayerWidths first_layer_widths(const char *first_layer_infill_width)
+{
+    Print print;
+    Slic3r::Test::init_and_process_print({ Slic3r::Test::cube(20) }, print, {
+        { "nozzle_diameter",                  "0.4" },
+        { "layer_height",                     0.2 },
+        { "initial_layer_print_height",       0.2 },
+        { "line_width",                       "0.45" },
+        { "outer_wall_line_width",            "0" },
+        { "inner_wall_line_width",            "0" },
+        { "sparse_infill_line_width",         "0" },
+        { "internal_solid_infill_line_width", "0" },
+        { "top_surface_line_width",           "0" },
+        { "initial_layer_line_width",         "0.4" },
+        { "initial_layer_infill_line_width",  first_layer_infill_width },
+    });
+
+    const Layer       &first  = *print.objects().front()->get_layer(0);
+    const LayerRegion &region = *first.regions().front();
+    double volume = 0.;
+    double length = 0.;
+    for (const ExtrusionEntity *entity : region.fills.flatten().entities) {
+        volume += entity->total_volume();
+        length += unscale<double>(entity->length());
+    }
+    REQUIRE(length > 0.);
+
+    return {
+        region.flow(frPerimeter).width(),
+        region.flow(frExternalPerimeter).width(),
+        region.flow(frInfill).width(),
+        region.flow(frSolidInfill).width(),
+        region.flow(frTopSolidInfill).width(),
+        print.objects().front()->get_layer(1)->regions().front()->flow(frSolidInfill).width(),
+        volume / length,
+        Slic3r::Test::gcode(print),
+    };
+}
+
+} // namespace
+
+TEST_CASE("First layer infill line width widens only the infill of the first layer", "[Flow]")
+{
+    const FirstLayerWidths widths = first_layer_widths("0.8");
+
+    CHECK_THAT(widths.first_layer_sparse_infill, Catch::Matchers::WithinAbs(0.8, 1e-4));
+    CHECK_THAT(widths.first_layer_solid_infill,  Catch::Matchers::WithinAbs(0.8, 1e-4));
+    CHECK_THAT(widths.first_layer_top_surface,   Catch::Matchers::WithinAbs(0.8, 1e-4));
+    CHECK_THAT(widths.first_layer_wall,          Catch::Matchers::WithinAbs(0.4, 1e-4));
+    CHECK_THAT(widths.first_layer_outer_wall,    Catch::Matchers::WithinAbs(0.4, 1e-4));
+    CHECK_THAT(widths.second_layer_solid_infill, Catch::Matchers::WithinAbs(0.45, 1e-4));
+    CHECK(widths.gcode.find("; first layer infill extrusion width = 0.80mm") != std::string::npos);
+
+    const FirstLayerWidths unset = first_layer_widths("0");
+    CHECK(widths.first_layer_fill_mm3_per_mm > 1.5 * unset.first_layer_fill_mm3_per_mm);
+}
+
+TEST_CASE("First layer infill line width of zero follows the first layer line width", "[Flow]")
+{
+    const FirstLayerWidths widths = first_layer_widths("0");
+
+    CHECK_THAT(widths.first_layer_sparse_infill, Catch::Matchers::WithinAbs(0.4, 1e-4));
+    CHECK_THAT(widths.first_layer_solid_infill,  Catch::Matchers::WithinAbs(0.4, 1e-4));
+    CHECK_THAT(widths.first_layer_top_surface,   Catch::Matchers::WithinAbs(0.4, 1e-4));
+    CHECK_THAT(widths.first_layer_wall,          Catch::Matchers::WithinAbs(0.4, 1e-4));
+    CHECK(widths.gcode.find("; first layer infill extrusion width") == std::string::npos);
+}
+
+TEST_CASE("First layer infill line width accepts a percentage of the nozzle diameter", "[Flow]")
+{
+    const FirstLayerWidths widths = first_layer_widths("150%");
+
+    CHECK_THAT(widths.first_layer_solid_infill, Catch::Matchers::WithinAbs(0.6, 1e-4));
+    CHECK_THAT(widths.first_layer_wall,         Catch::Matchers::WithinAbs(0.4, 1e-4));
+}
+
+TEST_CASE("First layer infill line width of zero resolves to the first layer line width as a G-code variable", "[Flow]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "nozzle_diameter",                 "0.4" },
+        { "line_width",                      "0.45" },
+        { "initial_layer_line_width",        "0.6" },
+        { "initial_layer_infill_line_width", "0" },
+    });
+    CHECK_THAT(Flow::extrusion_width("initial_layer_infill_line_width", config), Catch::Matchers::WithinAbs(0.6, 1e-4));
+
+    config.set_deserialize_strict({ { "initial_layer_infill_line_width", "0.8" } });
+    CHECK_THAT(Flow::extrusion_width("initial_layer_infill_line_width", config), Catch::Matchers::WithinAbs(0.8, 1e-4));
 }
