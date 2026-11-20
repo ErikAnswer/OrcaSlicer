@@ -25,6 +25,14 @@ inline int number_of_support_interface_bottom_layers(const PrintObjectConfig& ob
         object_config.support_interface_bottom_layers.value;
 }
 
+inline coordf_t support_object_xy_distance_under_top_z(const PrintObjectConfig& object_config, coordf_t top_z_distance)
+{
+    const coordf_t xy_distance = object_config.support_object_xy_distance.value;
+    return object_config.top_z_overrides_xy_distance.value ?
+        std::min(xy_distance, std::max<coordf_t>(0.2, top_z_distance)) :
+        xy_distance;
+}
+
 struct SupportParameters {
     SupportParameters() = delete;
     SupportParameters(const PrintObject& object)
@@ -99,7 +107,7 @@ struct SupportParameters {
             external_perimeter_width = std::max(external_perimeter_width, coordf_t(region.flow(object, frExternalPerimeter, slicing_params.layer_height).width()));
             bridge_flow_ratio += region.config().bridge_flow;
         }
-        this->gap_xy = object_config.support_object_xy_distance.value;
+        this->gap_xy = support_object_xy_distance_under_top_z(object_config, slicing_params.gap_support_object);
         this->gap_xy_first_layer = object_config.support_object_first_layer_gap.value;
         bridge_flow_ratio /= object.num_printing_regions();
 

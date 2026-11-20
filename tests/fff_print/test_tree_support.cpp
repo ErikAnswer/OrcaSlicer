@@ -1,7 +1,9 @@
 #include <catch2/catch_all.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <initializer_list>
+#include <limits>
 #include "libslic3r/Config.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Point.hpp"
@@ -11,6 +13,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_message.hpp>
 #include "libslic3r/Layer.hpp"
+#include "libslic3r/ExPolygon.hpp"
+#include "libslic3r/Line.hpp"
 #include "libslic3r/TriangleMesh.hpp"
 
 #include "test_helpers.hpp"
@@ -106,6 +110,36 @@ void sliced_twice_matches(const TriangleMesh &mesh, int build_plate_only, const 
     REQUIRE(first_difference(first, second) == first.size());
 }
 
+// Smallest distance from a support toolpath to the column of two_tier_mesh(), over the layers where
+// the column is all there is of the object.
+double support_to_column_gap(const char *type, const char *style, bool top_z_overrides_xy)
+{
+    Slic3r::Print print;
+    slice_with_tree_support(two_tier_mesh(), print, style, 30, 0, 0, {
+        { "support_type",                type },
+        { "support_object_xy_distance",  1.0 },
+        { "support_top_z_distance",      0.2 },
+        { "top_z_overrides_xy_distance", top_z_overrides_xy ? 1 : 0 },
+    });
+    const PrintObject *object = print.objects().front();
+    double gap = std::numeric_limits<double>::max();
+    for (const SupportLayer *support_layer : object->support_layers()) {
+        if (support_layer->print_z < 5. || support_layer->print_z > 13.)
+            continue;
+        const Layer *layer = *std::min_element(object->layers().begin(), object->layers().end(),
+            [support_layer](const Layer *a, const Layer *b) {
+                return std::abs(a->print_z - support_layer->print_z) < std::abs(b->print_z - support_layer->print_z);
+            });
+        Points points;
+        support_layer->support_fills.collect_points(points);
+        for (const ExPolygon &island : layer->lslices)
+            for (const Line &edge : to_lines(island))
+                for (const Point &point : points)
+                    gap = std::min(gap, edge.distance_to(point));
+    }
+    return unscale<double>(gap);
+}
+
 } // namespace
 
 TEST_CASE("Tree support is generated for an overhang and not for a plain cube", "[TreeSupport]")
@@ -197,4 +231,25 @@ TEST_CASE("Tree support toolpaths do not depend on the MST tie order", "[TreeSup
         { "tree_support_branch_angle",    40 },
         { "support_line_width",           0.4 },
     });
+}
+
+TEST_CASE("Top Z distance overriding the XY distance is off by default", "[TreeSupport]")
+{
+    REQUIRE_FALSE(DynamicPrintConfig::full_print_config().opt_bool("top_z_overrides_xy_distance"));
+}
+
+// With a 1 mm XY distance and a 0.2 mm top Z distance, the override brings the supports 0.8 mm closer
+// to the walls. Hybrid trees support the wide plate with the same polygons as normal supports.
+TEST_CASE("Top Z distance overriding the XY distance lets supports closer to the walls", "[TreeSupport]")
+{
+    const char *type  = "normal(auto)";
+    const char *style = "default";
+    SECTION("normal support") {}
+    SECTION("hybrid tree support") { type = "tree(auto)"; style = "tree_hybrid"; }
+
+    const double kept       = support_to_column_gap(type, style, false);
+    const double overridden = support_to_column_gap(type, style, true);
+    CAPTURE(kept, overridden);
+    REQUIRE(kept < 100.); // without support near the column the comparison below is meaningless
+    REQUIRE(overridden < kept - 0.4);
 }
