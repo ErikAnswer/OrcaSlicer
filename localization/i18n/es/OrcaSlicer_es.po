@@ -17780,6 +17780,9 @@ msgstr ""
 msgid "Line width of the first layer. If expressed as a %, it will be computed over the nozzle diameter."
 msgstr "Ancho de línea de la primera capa. Si se expresa como %, se calculará en base al diámetro de la boquilla."
 
+msgid "Line width of the infill of the first layer, including sparse infill, solid infill and top surface. Walls, support and everything else of the first layer are not affected and keep using the line width of the first layer. Zero means to use the line width of the first layer. If expressed as a %, it will be computed over the nozzle diameter."
+msgstr "Ancho de línea del relleno de la primera capa, incluidos el relleno de baja densidad, el relleno sólido y la superficie superior. Los perímetros, el soporte y el resto de la primera capa no se ven afectados y siguen usando el ancho de línea de la primera capa. Cero significa usar el ancho de línea de la primera capa. Si se expresa como %, se calculará en base al diámetro de la boquilla."
+
 msgid "First layer height"
 msgstr "Altura de la primera capa"
 
