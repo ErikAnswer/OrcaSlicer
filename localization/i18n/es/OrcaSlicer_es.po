@@ -38432,3 +38432,18 @@ msgstr ""
 
 msgid "Set wall loops above zero and a seam position other than random to use this setting."
 msgstr "Pon al menos un bucle de pared y una posición de costura que no sea aleatoria para usar este ajuste."
+
+msgid "Avoid crossing walls - Include supports"
+msgstr "Evitar cruzar paredes - Incluir soportes"
+
+msgid ""
+"Take the supports into account when detouring to avoid crossing walls, to reduce stringing between the object and its supports.\n"
+"\n"
+"When enabled, travel moves are also kept inside the outline of the supports and detour along it instead of crossing the gaps around them. It has no effect unless avoiding crossing walls is enabled."
+msgstr ""
+"Tiene en cuenta los soportes al desviar los desplazamientos para no cruzar paredes, y así reduce los hilos entre la pieza y sus soportes.\n"
+"\n"
+"Activado, los desplazamientos se mantienen también dentro del contorno de los soportes y lo rodean en vez de cruzar los huecos que hay a su alrededor. No tiene efecto si no está activado evitar cruzar paredes."
+
+msgid "Enable avoiding crossing walls to use this setting."
+msgstr "Activa evitar cruzar paredes para usar este ajuste."

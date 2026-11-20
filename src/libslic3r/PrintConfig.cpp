@@ -1344,6 +1344,15 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(0., false));
 
+    def = this->add("avoid_crossing_wall_includes_support", coBool);
+    def->label = L("Avoid crossing walls - Include supports");
+    def->category = L("Quality");
+    def->tooltip = L("Take the supports into account when detouring to avoid crossing walls, to reduce stringing between the object and its supports.\n\n"
+                     "When enabled, travel moves are also kept inside the outline of the supports and detour along it instead of crossing the gaps around them. "
+                     "It has no effect unless avoiding crossing walls is enabled.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     // BBS
     def = this->add("supertack_plate_temp", coInts);
     def->label = L("Other layers");

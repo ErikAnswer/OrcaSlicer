@@ -2021,6 +2021,7 @@ PRINT_CONFIG_CLASS_DERIVED_DEFINE(
     ((ConfigOptionFloats,             first_x_layer_fan_speed))
     ((ConfigOptionBool,               reduce_crossing_wall))
     ((ConfigOptionFloatOrPercent,     max_travel_detour_distance))
+    ((ConfigOptionBool,               avoid_crossing_wall_includes_support))
     ((ConfigOptionPoints,             printable_area))
     ((ConfigOptionPointsGroups,       extruder_printable_area))
     ((ConfigOptionBool,               support_parallel_printheads))
