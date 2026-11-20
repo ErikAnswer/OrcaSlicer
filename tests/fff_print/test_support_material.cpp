@@ -581,3 +581,44 @@ TEST_CASE("Including supports reroutes travels without touching extrusions", "[S
     REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-3));
     REQUIRE(std::abs(with_supports.travel - without_supports.travel) > 1.0);
 }
+
+static MoveLengths two_objects_move_lengths(TriangleMesh first, bool include_supports)
+{
+    first.translate(80, 80, 0);
+    TriangleMesh second = make_cube(20, 20, 14);
+    second.translate(140, 90, 0);
+    std::vector<TriangleMesh> meshes;
+    meshes.push_back(std::move(first));
+    meshes.push_back(std::move(second));
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "enable_support",                       "1" },
+        { "layer_height",                         "0.2" },
+        { "support_on_build_plate_only",          "0" },
+        { "reduce_crossing_wall",                 "1" },
+        { "avoid_crossing_wall_includes_support", include_supports ? "1" : "0" },
+    });
+    Print print;
+    Model model;
+    init_print(std::move(meshes), print, model, config, nullptr, false);
+    return move_lengths(gcode(print));
+}
+
+TEST_CASE("Including supports reroutes travels between two objects when one of them is supported", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    const MoveLengths without_supports = two_objects_move_lengths(support_capital(), false);
+    const MoveLengths with_supports    = two_objects_move_lengths(support_capital(), true);
+    REQUIRE(without_supports.extrusion > 0);
+    REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-3));
+    REQUIRE(std::abs(with_supports.travel - without_supports.travel) > 1.0);
+}
+
+TEST_CASE("Including supports leaves the travels between two unsupported objects alone", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    const MoveLengths without_supports = two_objects_move_lengths(make_cube(20, 20, 14), false);
+    const MoveLengths with_supports    = two_objects_move_lengths(make_cube(20, 20, 14), true);
+    REQUIRE(without_supports.extrusion > 0);
+    REQUIRE_THAT(with_supports.travel, Catch::Matchers::WithinAbs(without_supports.travel, 1e-6));
+    REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-6));
+}
