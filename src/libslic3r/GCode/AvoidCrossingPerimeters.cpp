@@ -1199,9 +1199,9 @@ static Polygons get_boundary_external(const Layer &layer, bool include_supports_
             if (layer_below)
                 for (const ExPolygon &island : layer_below->lslices)
                     append(holes_per_obj, island.holes);
-            if (include_supports_in_boundary)
-                supports_per_obj = get_support_polygons(object->get_support_layer_at_printz(layer.print_z, EPSILON), perimeter_spacing);
         }
+        if (include_supports_in_boundary)
+            supports_per_obj = get_support_polygons(object->get_support_layer_at_printz(layer.print_z, EPSILON), perimeter_spacing);
 
         // After 7ff76d07684858fd937ef2f5d863f105a10f798e, when expand is called on CW polygons (holes), they are shrunk
         // instead of expanded because union that makes CCW from CW isn't called anymore. So let's make it CCW.
