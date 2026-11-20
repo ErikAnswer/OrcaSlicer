@@ -32,6 +32,8 @@
 #include "libslic3r/Support/SupportParameters.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/BoundingBox.hpp"
+#include "libslic3r/GCode/AvoidCrossingPerimeters.hpp"
 
 using namespace Slic3r::Test;
 using namespace Slic3r;
@@ -527,3 +529,137 @@ TEST_CASE("Bottom-only support interface keeps the dense interface density", "[S
     REQUIRE(sp.bottom_interface_density > sp.support_density);
 }
 
+
+struct MoveLengths {
+    double travel    = 0;
+    double extrusion = 0;
+};
+
+static MoveLengths move_lengths(const std::string &gcode)
+{
+    MoveLengths lengths;
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&lengths](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        const double len = std::hypot(line.dist_X(self), line.dist_Y(self));
+        if (line.extruding(self))
+            lengths.extrusion += len;
+        else
+            lengths.travel += len;
+    });
+    return lengths;
+}
+
+static MoveLengths supported_capital_move_lengths(bool avoid_crossing_walls, bool include_supports)
+{
+    return move_lengths(slice({ support_capital() }, {
+        { "enable_support",                       1 },
+        { "layer_height",                         0.2 },
+        { "support_on_build_plate_only",          0 },
+        { "reduce_crossing_wall",                 avoid_crossing_walls ? 1 : 0 },
+        { "avoid_crossing_wall_includes_support", include_supports ? 1 : 0 },
+    }));
+}
+
+TEST_CASE("Including supports when avoiding crossing walls is off by default", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    const DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    REQUIRE_FALSE(config.opt_bool("avoid_crossing_wall_includes_support"));
+}
+
+TEST_CASE("Including supports does nothing while avoiding crossing walls is disabled", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    const MoveLengths without_supports = supported_capital_move_lengths(false, false);
+    const MoveLengths with_supports    = supported_capital_move_lengths(false, true);
+    REQUIRE(without_supports.extrusion > 0);
+    REQUIRE_THAT(with_supports.travel, Catch::Matchers::WithinAbs(without_supports.travel, 1e-6));
+    REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-6));
+}
+
+TEST_CASE("Including supports reroutes travels without touching extrusions", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    const MoveLengths without_supports = supported_capital_move_lengths(true, false);
+    const MoveLengths with_supports    = supported_capital_move_lengths(true, true);
+    REQUIRE(without_supports.extrusion > 0);
+    REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-3));
+    REQUIRE(std::abs(with_supports.travel - without_supports.travel) > 1.0);
+}
+
+static void place_beside_a_plain_cube(TriangleMesh first, bool include_supports, Print &print, Model &model)
+{
+    first.translate(80, 80, 0);
+    TriangleMesh second = make_cube(20, 20, 14);
+    second.translate(140, 90, 0);
+    std::vector<TriangleMesh> meshes;
+    meshes.push_back(std::move(first));
+    meshes.push_back(std::move(second));
+
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "enable_support",                       "1" },
+        { "layer_height",                         "0.2" },
+        { "support_on_build_plate_only",          "0" },
+        { "reduce_crossing_wall",                 "1" },
+        { "avoid_crossing_wall_includes_support", include_supports ? "1" : "0" },
+    });
+    init_print(std::move(meshes), print, model, config, nullptr, false);
+}
+
+static MoveLengths two_objects_move_lengths(TriangleMesh first, bool include_supports)
+{
+    Print print;
+    Model model;
+    place_beside_a_plain_cube(std::move(first), include_supports, print, model);
+    return move_lengths(gcode(print));
+}
+
+static bool stays_within(const Polygons &boundary, const Point &center, coord_t reach)
+{
+    const BoundingBox extents = get_extents(boundary);
+    return extents.min.x() > center.x() - reach && extents.max.x() < center.x() + reach &&
+           extents.min.y() > center.y() - reach && extents.max.y() < center.y() + reach;
+}
+
+TEST_CASE("The boundary between objects takes the supports of each object at its own position", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    Print print;
+    Model model;
+    place_beside_a_plain_cube(support_capital(), true, print, model);
+    print.process();
+
+    const PrintObject  &supported_object = *print.objects().front();
+    const PrintObject  &plain_object     = *print.objects().back();
+    const SupportLayer *support_layer    = nullptr;
+    for (const SupportLayer *candidate : supported_object.support_layers())
+        if (!candidate->support_fills.empty()) {
+            support_layer = candidate;
+            if (plain_object.get_layer_at_printz(candidate->print_z, EPSILON) != nullptr)
+                break;
+        }
+    REQUIRE(support_layer != nullptr);
+    REQUIRE(plain_object.support_layers().empty());
+
+    const Point   supported_center = supported_object.instances().front().shift;
+    const coord_t reach            = scaled<coord_t>(30.);
+
+    REQUIRE(AvoidCrossingPerimeters::boundary_between_objects(*support_layer, false).empty());
+
+    const Polygons from_support_layer = AvoidCrossingPerimeters::boundary_between_objects(*support_layer, true);
+    REQUIRE(!from_support_layer.empty());
+    REQUIRE(stays_within(from_support_layer, supported_center, reach));
+
+    if (const Layer *plain_layer = plain_object.get_layer_at_printz(support_layer->print_z, EPSILON)) {
+        REQUIRE(AvoidCrossingPerimeters::boundary_between_objects(*plain_layer, false).empty());
+        const Polygons from_plain_layer = AvoidCrossingPerimeters::boundary_between_objects(*plain_layer, true);
+        REQUIRE(!from_plain_layer.empty());
+        REQUIRE(stays_within(from_plain_layer, supported_center, reach));
+    }
+}
+
+TEST_CASE("Including supports leaves the travels between two unsupported objects alone", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    const MoveLengths without_supports = two_objects_move_lengths(make_cube(20, 20, 14), false);
+    const MoveLengths with_supports    = two_objects_move_lengths(make_cube(20, 20, 14), true);
+    REQUIRE(without_supports.extrusion > 0);
+    REQUIRE_THAT(with_supports.travel, Catch::Matchers::WithinAbs(without_supports.travel, 1e-6));
+    REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-6));
+}

@@ -1116,25 +1116,49 @@ static ExPolygons inner_offset(const ExPolygons &ex_polygons, double offset_dis)
     return ex_poly_result;
 }
 
-//#define INCLUDE_SUPPORTS_IN_BOUNDARY
-
-// called by AvoidCrossingPerimeters::travel_to()
-static ExPolygons get_boundary(const Layer &layer, float perimeter_spacing)
+static ExPolygons get_support_polygons(const SupportLayer *support_layer, float offset)
 {
-    // const float perimeter_spacing = get_perimeter_spacing(layer);
-    const float perimeter_offset  = perimeter_spacing / 2.f;
-    auto const *support_layer     = dynamic_cast<const SupportLayer *>(&layer);
-    ExPolygons  boundary          = union_ex(inner_offset(layer.lslices, 1.5 * perimeter_spacing));
+    if (support_layer == nullptr)
+        return {};
+    if (!support_layer->support_islands.empty())
+        return offset_ex(support_layer->support_islands, offset);
+    ExPolygons support_contours;
+    for (const ExPolygon &covered : union_ex(support_layer->support_fills.polygons_covered_by_spacing(offset)))
+        support_contours.emplace_back(covered.contour);
+    return support_contours;
+}
+
+static ExPolygons get_boundary_including_supports(const Layer &layer, float perimeter_spacing)
+{
+    ExPolygons boundary = layer.lslices;
+    append(boundary, get_support_polygons(layer.object()->get_support_layer_at_printz(layer.print_z, EPSILON), perimeter_spacing));
+    if (dynamic_cast<const SupportLayer *>(&layer) != nullptr)
+        if (const Layer *layer_below = layer.object()->get_first_layer_bellow_printz(layer.print_z, EPSILON))
+            append(boundary, layer_below->lslices);
+    return union_ex(inner_offset(union_ex(boundary), 1.5 * perimeter_spacing));
+}
+
+static ExPolygons get_boundary_of_object_only(const Layer &layer, float perimeter_spacing)
+{
+    auto const *support_layer = dynamic_cast<const SupportLayer *>(&layer);
+    ExPolygons  boundary      = union_ex(inner_offset(layer.lslices, 1.5 * perimeter_spacing));
     if(support_layer) {
-#ifdef INCLUDE_SUPPORTS_IN_BOUNDARY
-        append(boundary, inner_offset(support_layer->support_islands, 1.5 * perimeter_spacing));
-#endif
         auto *layer_below = layer.object()->get_first_layer_bellow_printz(layer.print_z, EPSILON);
         if (layer_below)
             append(boundary, inner_offset(layer_below->lslices, 1.5 * perimeter_spacing));
         // After calling inner_offset it is necessary to call union_ex because of the possibility of intersection ExPolygons
         boundary = union_ex(boundary);
     }
+    return boundary;
+}
+
+// called by AvoidCrossingPerimeters::travel_to()
+static ExPolygons get_boundary(const Layer &layer, float perimeter_spacing, bool include_supports_in_boundary)
+{
+    // const float perimeter_spacing = get_perimeter_spacing(layer);
+    const float perimeter_offset  = perimeter_spacing / 2.f;
+    ExPolygons  boundary          = include_supports_in_boundary ? get_boundary_including_supports(layer, perimeter_spacing) :
+                                                                   get_boundary_of_object_only(layer, perimeter_spacing);
     // Collect all top layers that will not be crossed.
     size_t      polygons_count    = 0;
     for (const LayerRegion *layer_region : layer.regions())
@@ -1156,21 +1180,17 @@ static ExPolygons get_boundary(const Layer &layer, float perimeter_spacing)
 }
 
 // called by AvoidCrossingPerimeters::travel_to()
-static Polygons get_boundary_external(const Layer &layer)
+static Polygons get_boundary_external(const Layer &layer, bool include_supports_in_boundary)
 {
     const float perimeter_spacing = get_perimeter_spacing_external(layer);
     const float perimeter_offset  = perimeter_spacing / 2.f;
     auto const *support_layer     = dynamic_cast<const SupportLayer *>(&layer);
     Polygons    boundary;
-#ifdef INCLUDE_SUPPORTS_IN_BOUNDARY
     ExPolygons  supports_boundary;
-#endif
     // Collect all holes for all printed objects and their instances, which will be printed at the same time as passed "layer".
     for (const PrintObject *object : layer.object()->print()->objects()) {
         Polygons   holes_per_obj;
-#ifdef INCLUDE_SUPPORTS_IN_BOUNDARY
         ExPolygons supports_per_obj;
-#endif
         if (const Layer *l = object->get_layer_at_printz(layer.print_z, EPSILON); l)
             for (const ExPolygon &island : l->lslices)
                 append(holes_per_obj, island.holes);
@@ -1179,10 +1199,9 @@ static Polygons get_boundary_external(const Layer &layer)
             if (layer_below)
                 for (const ExPolygon &island : layer_below->lslices)
                     append(holes_per_obj, island.holes);
-#ifdef INCLUDE_SUPPORTS_IN_BOUNDARY
-            append(supports_per_obj, support_layer->support_islands);
-#endif
         }
+        if (include_supports_in_boundary)
+            supports_per_obj = get_support_polygons(object->get_support_layer_at_printz(layer.print_z, EPSILON), perimeter_spacing);
 
         // After 7ff76d07684858fd937ef2f5d863f105a10f798e, when expand is called on CW polygons (holes), they are shrunk
         // instead of expanded because union that makes CCW from CW isn't called anymore. So let's make it CCW.
@@ -1193,12 +1212,10 @@ static Polygons get_boundary_external(const Layer &layer)
             append(boundary, holes_per_obj);
             for (; boundary_idx < boundary.size(); ++boundary_idx)
                 boundary[boundary_idx].translate(instance.shift);
-#ifdef INCLUDE_SUPPORTS_IN_BOUNDARY
             size_t support_idx = supports_boundary.size();
             append(supports_boundary, supports_per_obj);
             for (; support_idx < supports_boundary.size(); ++support_idx)
                 supports_boundary[support_idx].translate(instance.shift);
-#endif
         }
     }
 
@@ -1207,9 +1224,8 @@ static Polygons get_boundary_external(const Layer &layer)
     // Reverse all polygons for making normals point from the polygon out.
     for (Polygon &poly : boundary)
         poly.reverse();
-#ifdef INCLUDE_SUPPORTS_IN_BOUNDARY
-    append(boundary, to_polygons(inner_offset(supports_boundary, perimeter_offset)));
-#endif
+    if (!supports_boundary.empty())
+        append(boundary, to_polygons(union_ex(inner_offset(union_ex(supports_boundary), 1.5 * perimeter_spacing))));
     return boundary;
 }
 
@@ -1251,6 +1267,11 @@ static void init_boundary(AvoidCrossingPerimeters::Boundary *boundary, Polygons 
     init_boundary_distances(boundary);
 }
 
+Polygons AvoidCrossingPerimeters::boundary_between_objects(const Layer &layer, bool include_supports_in_boundary)
+{
+    return get_boundary_external(layer, include_supports_in_boundary);
+}
+
 // Plan travel, which avoids perimeter crossings by following the boundaries of the layer.
 Polyline AvoidCrossingPerimeters::travel_to(const GCode &gcodegen, const Point &point, bool *could_be_wipe_disabled)
 {
@@ -1269,14 +1290,15 @@ Polyline AvoidCrossingPerimeters::travel_to(const GCode &gcodegen, const Point &
     const ExPolygons               &lslices          = gcodegen.layer()->lslices;
     const std::vector<BoundingBox> &lslices_bboxes   = gcodegen.layer()->lslices_bboxes;
     bool                            is_support_layer = (dynamic_cast<const SupportLayer *>(gcodegen.layer()) != nullptr);
+    const bool                      include_supports_in_boundary = gcodegen.config().avoid_crossing_wall_includes_support;
     if (!use_external && (is_support_layer || (!m_lslices_offset.empty() && !any_expolygon_contains(m_lslices_offset, m_lslices_offset_bboxes, m_grid_lslice, travel)))) {
         // Initialize m_internal only when it is necessary.
         if (m_internal.boundaries.empty()) {
-            init_boundary(&m_internal, to_polygons(get_boundary(*gcodegen.layer(), get_perimeter_spacing(*gcodegen.layer()))), {start, end});
+            init_boundary(&m_internal, to_polygons(get_boundary(*gcodegen.layer(), get_perimeter_spacing(*gcodegen.layer()), include_supports_in_boundary)), {start, end});
         } else if (!(m_internal.bbox.contains(startf) && m_internal.bbox.contains(endf))) {
             // check if start and end are in bbox, if not, merge start and end points to bbox
             m_internal.clear();
-            init_boundary(&m_internal, to_polygons(get_boundary(*gcodegen.layer(), get_perimeter_spacing(*gcodegen.layer()))), {start, end});
+            init_boundary(&m_internal, to_polygons(get_boundary(*gcodegen.layer(), get_perimeter_spacing(*gcodegen.layer()), include_supports_in_boundary)), {start, end});
         }
 
         if (!m_internal.boundaries.empty()) {
@@ -1287,11 +1309,11 @@ Polyline AvoidCrossingPerimeters::travel_to(const GCode &gcodegen, const Point &
     } else if (use_external) {
         // Initialize m_external only when exist any external travel for the current layer.
         if (m_external.boundaries.empty()) {
-            init_boundary(&m_external, get_boundary_external(*gcodegen.layer()), {start, end});
+            init_boundary(&m_external, boundary_between_objects(*gcodegen.layer(), include_supports_in_boundary), {start, end});
         } else if (!(m_external.bbox.contains(startf) && m_external.bbox.contains(endf))) {
             // check if start and end are in bbox
             m_external.clear();
-            init_boundary(&m_external, get_boundary_external(*gcodegen.layer()), {start, end});
+            init_boundary(&m_external, boundary_between_objects(*gcodegen.layer(), include_supports_in_boundary), {start, end});
         }
         
         // Trim the travel line by the bounding box.
