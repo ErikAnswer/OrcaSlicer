@@ -38,6 +38,8 @@ public:
 
     Polyline    travel_to(const GCode& gcodegen, const Point& point, bool* could_be_wipe_disabled);
 
+    static Polygons boundary_between_objects(const Layer &layer, bool include_supports_in_boundary);
+
     struct Boundary {
         // Collection of boundaries used for detection of crossing perimeters for travels
         Polygons                        boundaries;

@@ -1267,6 +1267,11 @@ static void init_boundary(AvoidCrossingPerimeters::Boundary *boundary, Polygons 
     init_boundary_distances(boundary);
 }
 
+Polygons AvoidCrossingPerimeters::boundary_between_objects(const Layer &layer, bool include_supports_in_boundary)
+{
+    return get_boundary_external(layer, include_supports_in_boundary);
+}
+
 // Plan travel, which avoids perimeter crossings by following the boundaries of the layer.
 Polyline AvoidCrossingPerimeters::travel_to(const GCode &gcodegen, const Point &point, bool *could_be_wipe_disabled)
 {
@@ -1304,11 +1309,11 @@ Polyline AvoidCrossingPerimeters::travel_to(const GCode &gcodegen, const Point &
     } else if (use_external) {
         // Initialize m_external only when exist any external travel for the current layer.
         if (m_external.boundaries.empty()) {
-            init_boundary(&m_external, get_boundary_external(*gcodegen.layer(), include_supports_in_boundary), {start, end});
+            init_boundary(&m_external, boundary_between_objects(*gcodegen.layer(), include_supports_in_boundary), {start, end});
         } else if (!(m_external.bbox.contains(startf) && m_external.bbox.contains(endf))) {
             // check if start and end are in bbox
             m_external.clear();
-            init_boundary(&m_external, get_boundary_external(*gcodegen.layer(), include_supports_in_boundary), {start, end});
+            init_boundary(&m_external, boundary_between_objects(*gcodegen.layer(), include_supports_in_boundary), {start, end});
         }
         
         // Trim the travel line by the bounding box.

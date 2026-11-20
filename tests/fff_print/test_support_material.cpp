@@ -32,6 +32,8 @@
 #include "libslic3r/Support/SupportParameters.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/BoundingBox.hpp"
+#include "libslic3r/GCode/AvoidCrossingPerimeters.hpp"
 
 using namespace Slic3r::Test;
 using namespace Slic3r;
@@ -582,7 +584,7 @@ TEST_CASE("Including supports reroutes travels without touching extrusions", "[S
     REQUIRE(std::abs(with_supports.travel - without_supports.travel) > 1.0);
 }
 
-static MoveLengths two_objects_move_lengths(TriangleMesh first, bool include_supports)
+static void place_beside_a_plain_cube(TriangleMesh first, bool include_supports, Print &print, Model &model)
 {
     first.translate(80, 80, 0);
     TriangleMesh second = make_cube(20, 20, 14);
@@ -599,19 +601,58 @@ static MoveLengths two_objects_move_lengths(TriangleMesh first, bool include_sup
         { "reduce_crossing_wall",                 "1" },
         { "avoid_crossing_wall_includes_support", include_supports ? "1" : "0" },
     });
+    init_print(std::move(meshes), print, model, config, nullptr, false);
+}
+
+static MoveLengths two_objects_move_lengths(TriangleMesh first, bool include_supports)
+{
     Print print;
     Model model;
-    init_print(std::move(meshes), print, model, config, nullptr, false);
+    place_beside_a_plain_cube(std::move(first), include_supports, print, model);
     return move_lengths(gcode(print));
 }
 
-TEST_CASE("Including supports reroutes travels between two objects when one of them is supported", "[SupportMaterial][AvoidCrossingPerimeters]")
+static bool stays_within(const Polygons &boundary, const Point &center, coord_t reach)
 {
-    const MoveLengths without_supports = two_objects_move_lengths(support_capital(), false);
-    const MoveLengths with_supports    = two_objects_move_lengths(support_capital(), true);
-    REQUIRE(without_supports.extrusion > 0);
-    REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-3));
-    REQUIRE(std::abs(with_supports.travel - without_supports.travel) > 1.0);
+    const BoundingBox extents = get_extents(boundary);
+    return extents.min.x() > center.x() - reach && extents.max.x() < center.x() + reach &&
+           extents.min.y() > center.y() - reach && extents.max.y() < center.y() + reach;
+}
+
+TEST_CASE("The boundary between objects takes the supports of each object at its own position", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    Print print;
+    Model model;
+    place_beside_a_plain_cube(support_capital(), true, print, model);
+    print.process();
+
+    const PrintObject  &supported_object = *print.objects().front();
+    const PrintObject  &plain_object     = *print.objects().back();
+    const SupportLayer *support_layer    = nullptr;
+    for (const SupportLayer *candidate : supported_object.support_layers())
+        if (!candidate->support_fills.empty()) {
+            support_layer = candidate;
+            if (plain_object.get_layer_at_printz(candidate->print_z, EPSILON) != nullptr)
+                break;
+        }
+    REQUIRE(support_layer != nullptr);
+    REQUIRE(plain_object.support_layers().empty());
+
+    const Point   supported_center = supported_object.instances().front().shift;
+    const coord_t reach            = scaled<coord_t>(30.);
+
+    REQUIRE(AvoidCrossingPerimeters::boundary_between_objects(*support_layer, false).empty());
+
+    const Polygons from_support_layer = AvoidCrossingPerimeters::boundary_between_objects(*support_layer, true);
+    REQUIRE(!from_support_layer.empty());
+    REQUIRE(stays_within(from_support_layer, supported_center, reach));
+
+    if (const Layer *plain_layer = plain_object.get_layer_at_printz(support_layer->print_z, EPSILON)) {
+        REQUIRE(AvoidCrossingPerimeters::boundary_between_objects(*plain_layer, false).empty());
+        const Polygons from_plain_layer = AvoidCrossingPerimeters::boundary_between_objects(*plain_layer, true);
+        REQUIRE(!from_plain_layer.empty());
+        REQUIRE(stays_within(from_plain_layer, supported_center, reach));
+    }
 }
 
 TEST_CASE("Including supports leaves the travels between two unsupported objects alone", "[SupportMaterial][AvoidCrossingPerimeters]")
