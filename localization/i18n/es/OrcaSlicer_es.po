@@ -38402,3 +38402,15 @@ msgstr "Aceleración máxima a partir de la altura final."
 
 msgid "Enable slowing down by height to use this setting."
 msgstr "Activa la reducción de velocidad según la altura para usar este ajuste."
+
+msgid "Top Z distance overrides XY distance"
+msgstr "La distancia Z superior manda sobre la X-Y"
+
+msgid ""
+"Let supports get closer to the walls of the object, so that an overhang is supported up to its edge and its underside prints cleaner.\n"
+"\n"
+"When enabled, the support/object XY distance is lowered to the top Z distance, though never below 0.2 mm. It is never raised, and the first layer keeps its own gap. When disabled, supports always keep the support/object XY distance."
+msgstr ""
+"Deja que los soportes se acerquen más a las paredes del objeto, para que un voladizo quede apoyado hasta su borde y su cara inferior salga más limpia.\n"
+"\n"
+"Activado, la distancia soporte/objeto X-Y se reduce hasta la distancia Z superior, pero nunca por debajo de 0,2 mm. Nunca se aumenta, y la primera capa conserva su propia separación. Desactivado, los soportes mantienen siempre la distancia soporte/objeto X-Y."

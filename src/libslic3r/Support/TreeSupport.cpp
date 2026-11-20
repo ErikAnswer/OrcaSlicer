@@ -2176,6 +2176,8 @@ void TreeSupport::draw_circles()
     const double nozzle_diameter = m_object->print()->config().nozzle_diameter.get_at(0);
     const coordf_t line_width = config.get_abs_value("support_line_width", nozzle_diameter);
     const coordf_t line_width_scaled           = scale_(line_width);
+    const coordf_t roof_xy_distance            = support_object_xy_distance_under_top_z(config, top_z_distance);
+    const bool roof_overrides_xy               = roof_xy_distance < m_ts_data->m_xy_distance;
     const bool with_lightning_infill = m_support_params.base_fill_pattern == ipLightning;
     coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
     const float tree_brim_width = config.tree_support_brim_width.value;
@@ -2236,12 +2238,10 @@ void TreeSupport::draw_circles()
                 ExPolygons extra_wall_areas;
                 ExPolygons collision_sharp_tails;
                 ExPolygons collision_base;
-                auto             get_collision = [&](bool sharp_tail) -> ExPolygons             &{
-                    ExPolygons &collision = sharp_tail ? collision_sharp_tails : collision_base;
+                ExPolygons collision_roof;
+                auto             get_collision_with_gap = [&](ExPolygons &collision, coordf_t gap) -> ExPolygons &{
                     if (collision.empty()) {
-                        collision = offset_ex(m_ts_data->m_layer_outlines[obj_layer_nr],
-                                              sharp_tail ? scale_(top_z_distance) :
-                                                           scale_((obj_layer_nr == 0) ? config.support_object_first_layer_gap : m_ts_data->m_xy_distance));
+                        collision = offset_ex(m_ts_data->m_layer_outlines[obj_layer_nr], scale_(gap));
                         // the top layers may be too close to interface with adaptive layer heights and very small overhang angle
                         if (top_z_distance > EPSILON) {
                             float accum_height = 0;
@@ -2253,6 +2253,14 @@ void TreeSupport::draw_circles()
                         }
                     }
                     return collision;
+                };
+                auto             get_collision = [&](bool sharp_tail) -> ExPolygons             &{
+                    return sharp_tail ? get_collision_with_gap(collision_sharp_tails, top_z_distance) :
+                                        get_collision_with_gap(collision_base, (obj_layer_nr == 0) ? config.support_object_first_layer_gap : m_ts_data->m_xy_distance);
+                };
+                // Ported from Bambu Studio (top_z_overrides_xy_distance): the interface may get closer to the walls than the branches.
+                auto             get_roof_collision = [&]() -> ExPolygons &{
+                    return roof_overrides_xy && obj_layer_nr > 0 ? get_collision_with_gap(collision_roof, roof_xy_distance) : get_collision(false);
                 };
 
                 BOOST_LOG_TRIVIAL(debug) << "circles at layer " << layer_nr << " contact nodes size=" << curr_layer_nodes.size();
@@ -2354,9 +2362,9 @@ void TreeSupport::draw_circles()
                 //m_object->print()->set_status(65, (boost::format( _u8L("Support: generate polygons at layer %d")) % layer_nr).str());
 
                 // join roof segments
-                roof_areas     = diff_clipped(closing_ex(roof_areas, line_width_scaled), get_collision(false));
+                roof_areas     = diff_clipped(closing_ex(roof_areas, line_width_scaled), get_roof_collision());
                 roof_areas     = intersection_ex(roof_areas, m_machine_border);
-                roof_base_areas = diff_clipped(closing_ex(roof_base_areas, line_width_scaled), get_collision(false));
+                roof_base_areas = diff_clipped(closing_ex(roof_base_areas, line_width_scaled), get_roof_collision());
                 roof_base_areas = intersection_ex(roof_base_areas, m_machine_border);
                 if (!roof_base_areas.empty() && !roof_areas.empty())
                     roof_base_areas = diff_ex(roof_base_areas,
@@ -2364,7 +2372,8 @@ void TreeSupport::draw_circles()
 
                 first_base_roof_area = roof_areas.size();
                 append(roof_areas, std::move(roof_base_areas));
-                roof_1st_layer = diff_clipped(closing_ex(roof_1st_layer, line_width_scaled), get_collision(false));
+                roof_1st_layer = diff_clipped(closing_ex(roof_1st_layer, line_width_scaled),
+                                              roof_overrides_xy ? offset_ex(get_roof_collision(), line_width_scaled / 2) : get_collision(false));
 
                 // roof_1st_layer and roof_areas may intersect, so need to subtract roof_areas from roof_1st_layer
                 roof_1st_layer = diff_ex(roof_1st_layer, ClipperUtils::clip_clipper_polygons_with_subject_bbox(roof_areas,get_extents(roof_1st_layer)));

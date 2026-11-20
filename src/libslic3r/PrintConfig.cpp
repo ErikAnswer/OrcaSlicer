@@ -7599,6 +7599,16 @@ void PrintConfigDef::init_fff_params()
     //Support with too small spacing may touch the object and difficult to remove.
     def->set_default_value(new ConfigOptionFloat(0.2));
 
+    def = this->add("top_z_overrides_xy_distance", coBool);
+    def->label = L("Top Z distance overrides XY distance");
+    def->category = L("Support");
+    def->tooltip = L("Let supports get closer to the walls of the object, so that an overhang is supported up to its edge and its underside prints cleaner.\n\n"
+                     "When enabled, the support/object XY distance is lowered to the top Z distance, though never below 0.2 mm. "
+                     "It is never raised, and the first layer keeps its own gap. "
+                     "When disabled, supports always keep the support/object XY distance.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("support_angle", coFloat);
     def->label = L("Pattern angle");
     def->category = L("Support");
