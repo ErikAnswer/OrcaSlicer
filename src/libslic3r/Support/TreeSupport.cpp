@@ -2176,7 +2176,7 @@ void TreeSupport::draw_circles()
     const double nozzle_diameter = m_object->print()->config().nozzle_diameter.get_at(0);
     const coordf_t line_width = config.get_abs_value("support_line_width", nozzle_diameter);
     const coordf_t line_width_scaled           = scale_(line_width);
-    const coordf_t roof_xy_distance            = support_object_xy_distance_under_top_z(config, top_z_distance);
+    const coordf_t roof_xy_distance            = support_object_xy_distance_under_top_z(config, m_slicing_params.gap_support_object);
     const bool roof_overrides_xy               = roof_xy_distance < m_ts_data->m_xy_distance;
     const bool with_lightning_infill = m_support_params.base_fill_pattern == ipLightning;
     coordf_t support_extrusion_width = m_support_params.support_extrusion_width;
