@@ -74,10 +74,12 @@ public:
     // Slows the last `tail_volume` mm3 extruded in one tower visit down to `speed_factor` of its feedrate
     // (the whole visit when `tail_volume` <= 0), splitting the linear move that crosses the limit. Positions
     // are tracked like WipeTowerIntegration::post_process_wipe_tower_moves(): from `start_pos`, reset to
-    // `tool_change_start_pos` by the filament change placeholder. Moves after the slowed tail that relied on
-    // the previous feedrate get it back explicitly. Expects relative E, as the tower writer emits.
-    static void apply_tail_slowdown(std::string& gcode, float tail_volume, float speed_factor, float filament_area,
-                                    const Vec2f& start_pos, const Vec2f& tool_change_start_pos);
+    // `tool_change_start_pos` by the filament change placeholder. E before the placeholder (or in the whole
+    // visit without one) is measured with `filament_area_before_change`, after it with
+    // `filament_area_after_change`. Moves after the slowed tail that relied on the previous feedrate get it
+    // back explicitly. Expects relative E, as the tower writer emits.
+    static void apply_tail_slowdown(std::string& gcode, float tail_volume, float speed_factor, float filament_area_before_change,
+                                    float filament_area_after_change, const Vec2f& start_pos, const Vec2f& tool_change_start_pos);
 
 	// x			-- x coordinates of wipe tower in mm ( left bottom corner )
 	// y			-- y coordinates of wipe tower in mm ( left bottom corner )

@@ -1160,10 +1160,10 @@ bool is_splittable_tower_move(const TowerGCodeLine& line, const std::string& raw
 
 } // namespace
 
-void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, float speed_factor, float filament_area,
-                                     const Vec2f& start_pos, const Vec2f& tool_change_start_pos)
+void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, float speed_factor, float filament_area_before_change,
+                                     float filament_area_after_change, const Vec2f& start_pos, const Vec2f& tool_change_start_pos)
 {
-    if (gcode.empty() || filament_area <= 0.f || speed_factor >= 1.f - 1e-4f)
+    if (gcode.empty() || filament_area_before_change <= 0.f || filament_area_after_change <= 0.f || speed_factor >= 1.f - 1e-4f)
         return;
     speed_factor = std::clamp(speed_factor, 0.05f, 1.f);
 
@@ -1180,6 +1180,7 @@ void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, floa
     {
         size_t line_idx;
         float  e;
+        float  measured_e;
         float  feedrate;
         bool   splittable;
         Vec2f  from;
@@ -1189,9 +1190,11 @@ void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, floa
     std::vector<float> inherited_feedrate(lines.size(), 0.f);
     float              running_feedrate = 0.f;
     Vec2f              position         = start_pos;
+    float              length_scale     = filament_area_before_change / filament_area_after_change;
     for (size_t idx = 0; idx < lines.size(); ++idx) {
         if (lines[idx] == "[change_filament_gcode]") {
-            position = tool_change_start_pos;
+            position     = tool_change_start_pos;
+            length_scale = 1.f;
             continue;
         }
         const TowerGCodeLine line = parse_tower_gcode_line(lines[idx]);
@@ -1219,12 +1222,12 @@ void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, floa
         if (has_y)
             position.y() = y;
         if (has_e && e > 0.f && is_motion && running_feedrate > 0.f)
-            moves.push_back({idx, e, running_feedrate, !is_arc && is_splittable_tower_move(line, lines[idx]), from, position});
+            moves.push_back({idx, e, e * length_scale, running_feedrate, !is_arc && is_splittable_tower_move(line, lines[idx]), from, position});
     }
     if (moves.empty())
         return;
 
-    const float       tail_length  = tail_volume <= 0.f ? std::numeric_limits<float>::max() : tail_volume / filament_area;
+    const float       tail_length  = tail_volume <= 0.f ? std::numeric_limits<float>::max() : tail_volume / filament_area_after_change;
     std::vector<bool> slowed(lines.size(), false);
     size_t            first_slowed = lines.size();
     const auto        mark_slowed  = [&](size_t idx) {
@@ -1234,13 +1237,13 @@ void WipeTower2::apply_tail_slowdown(std::string& gcode, float tail_volume, floa
     float accumulated = 0.f;
     for (auto move = moves.rbegin(); move != moves.rend() && accumulated < tail_length - 1e-6f; ++move) {
         const float remaining = tail_length - accumulated;
-        accumulated += move->e;
-        if (!move->splittable || move->e <= remaining + 1e-5f) {
+        accumulated += move->measured_e;
+        if (!move->splittable || move->measured_e <= remaining + 1e-5f) {
             lines[move->line_idx] = with_tower_feedrate(parse_tower_gcode_line(lines[move->line_idx]), move->feedrate * speed_factor);
             mark_slowed(move->line_idx);
             continue;
         }
-        const float       head_share = 1.f - remaining / move->e;
+        const float       head_share = 1.f - remaining / move->measured_e;
         const Vec2f       mid        = move->from + (move->to - move->from) * head_share;
         const std::string mid_x      = float_to_string_decimal_point(mid.x(), 3);
         const std::string mid_y      = float_to_string_decimal_point(mid.y(), 3);
@@ -2952,9 +2955,11 @@ void WipeTower2::generate(std::vector<std::vector<WipeTower::ToolChangeResult>> 
 
         if (m_tail_speed_factor < 1.f && !is_first_layer())
             for (WipeTower::ToolChangeResult& tcr : layer_result) {
-                const size_t tail_tool = size_t(tcr.new_tool) < m_filpar.size() ? size_t(tcr.new_tool) : m_current_tool;
-                apply_tail_slowdown(tcr.gcode, m_tail_slowdown_volume, m_tail_speed_factor, m_filpar[tail_tool].filament_area,
-                                    tcr.start_pos, tcr.tool_change_start_pos);
+                const auto filament_area = [this](int tool) {
+                    return m_filpar[size_t(tool) < m_filpar.size() ? size_t(tool) : m_current_tool].filament_area;
+                };
+                apply_tail_slowdown(tcr.gcode, m_tail_slowdown_volume, m_tail_speed_factor, filament_area(tcr.initial_tool),
+                                    filament_area(tcr.new_tool), tcr.start_pos, tcr.tool_change_start_pos);
             }
 
         if (layer.combined_away)
