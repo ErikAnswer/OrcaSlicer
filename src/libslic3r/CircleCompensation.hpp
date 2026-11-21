@@ -64,7 +64,8 @@ ExPolygon apply_compensated_circles(const ExPolygon &expolygon, const CircleBoun
 
 // Circles of a surface that are among the compensated ones of its layer region.
 CircleBoundaries find_compensated_circles(const ExPolygon &expolygon, const CircleBoundaries &compensated);
-// Whether a wall loop runs around one of the given circles: same center and same side (contour or hole).
+// Whether a wall loop runs around one of the given circles: the loop is itself a circle with the same center,
+// on the same side (contour or hole) and inside the material, so no wider than a contour nor narrower than a hole.
 bool is_compensated_loop(const Polygon &loop, bool hole, const CircleBoundaries &circles);
 
 } // namespace Slic3r

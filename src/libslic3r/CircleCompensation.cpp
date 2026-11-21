@@ -229,11 +229,14 @@ CircleBoundaries find_compensated_circles(const ExPolygon &expolygon, const Circ
 
 bool is_compensated_loop(const Polygon &loop, bool hole, const CircleBoundaries &circles)
 {
-    if (circles.empty() || loop.points.size() < 3 || std::abs(loop.area()) < 1.)
+    Point  center;
+    double diameter = 0.;
+    if (circles.empty() || !is_approx_circle(loop, center, diameter))
         return false;
-    const Point center = loop.centroid();
     return std::any_of(circles.begin(), circles.end(), [&](const CircleBoundary &circle) {
-        return circle.hole == hole && (circle.center - center).cast<double>().norm() <= boundary_center_tolerance;
+        if (circle.hole != hole || (circle.center - center).cast<double>().norm() > boundary_center_tolerance)
+            return false;
+        return hole ? diameter >= circle.diameter - boundary_diameter_tolerance : diameter <= circle.diameter + boundary_diameter_tolerance;
     });
 }
 
