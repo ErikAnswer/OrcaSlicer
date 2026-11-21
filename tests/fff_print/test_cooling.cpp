@@ -680,6 +680,8 @@ TEST_CASE("Slow down by height limits speed and acceleration above the starting 
         { "initial_layer_print_height",  layer_height },
         { "layer_height",                layer_height },
         { "slow_down_for_layer_cooling", false },
+        { "sparse_infill_speed",         slowdown_start_speed },
+        { "filament_max_volumetric_speed", 200.0 },
     });
     config.set_key_value("layer_change_gcode", new ConfigOptionString{";TEST_LAYER=[layer_num]"});
     config.set_key_value("default_acceleration", new ConfigOptionFloatsNullable{5000.0});
