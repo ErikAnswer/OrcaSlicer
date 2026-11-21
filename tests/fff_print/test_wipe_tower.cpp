@@ -1568,6 +1568,69 @@ TEST_CASE("The prime tower tail slowdown never writes a split point that prints 
     }
 }
 
+TEST_CASE("The prime tower tail slowdown slows an arc whole instead of splitting it", "[WipeTower]")
+{
+    const std::string command = GENERATE(std::string("G2"), std::string("G3"));
+    std::string gcode = "G1 X10 Y0 E1 F3000\n" + command + " X20 Y0 I5 J0 E1\n";
+    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    CHECK(gcode == "G1 X10 Y0 E1 F3000\n" + command + " X20 Y0 I5 J0 E1 F1500\n");
+}
+
+TEST_CASE("The prime tower tail slowdown slows a commented move whole instead of splitting it", "[WipeTower]")
+{
+    std::string gcode = "G1 X10 Y0 E1 F3000\nG1 X20 Y0 E1 F3000 ; c\n";
+    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    CHECK(gcode == "G1 X10 Y0 E1 F3000\n"
+                   "G1 X20 Y0 E1 F1500 ; c\n");
+}
+
+TEST_CASE("The prime tower tail slowdown slows a never skip move whole and keeps its tag", "[WipeTower]")
+{
+    const std::string tag = WipeTower::never_skip_tag();
+    std::string gcode = "G1 X10 Y0 E1 F3000\nG1 X20 Y0 E1" + tag + "\n";
+    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    CHECK(gcode == "G1 X10 Y0 E1 F3000\n"
+                   "G1 X20 Y0 E1" + tag + " F1500\n");
+}
+
+TEST_CASE("The prime tower tail slowdown follows the travel that joins two parts of a merged visit", "[WipeTower]")
+{
+    const std::string visit = "G1 X10 Y0 E1 F3000\nG1 X30 Y0 F7200\nG1 X30 Y10 E1 F2400\n";
+    SECTION("tail inside the second part") {
+        std::string gcode = visit;
+        WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+        CHECK(gcode == "G1 X10 Y0 E1 F3000\n"
+                       "G1 X30 Y0 F7200\n"
+                       "G1 X30.000 Y5.000 E0.50000 F2400\n"
+                       "G1 X30.000 Y10.000 E0.50000 F1200\n");
+    }
+    SECTION("tail reaching back across the travel") {
+        std::string gcode = visit;
+        WipeTower2::apply_tail_slowdown(gcode, 1.5f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+        CHECK(gcode == "G1 X5.000 Y0.000 E0.50000 F3000\n"
+                       "G1 X10.000 Y0.000 E0.50000 F1500\n"
+                       "G1 X30 Y0 F7200\n"
+                       "G1 X30 Y10 E1 F1200\n");
+    }
+}
+
+TEST_CASE("The prime tower tail slowdown does not split a move when the tail starts at its beginning", "[WipeTower]")
+{
+    SECTION("whole moves") {
+        std::string gcode = "G1 X10 Y0 E1 F3000\nG1 X20 Y0 E1\n";
+        WipeTower2::apply_tail_slowdown(gcode, 1.f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+        CHECK(gcode == "G1 X10 Y0 E1 F3000\n"
+                       "G1 X20 Y0 E1 F1500\n");
+    }
+    SECTION("sum of inexact moves") {
+        std::string gcode = "G1 X10 Y0 E0.3 F3000\nG1 X20 Y0 E0.3\nG1 X30 Y0 E0.3\n";
+        WipeTower2::apply_tail_slowdown(gcode, 0.6f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+        CHECK(gcode == "G1 X10 Y0 E0.3 F3000\n"
+                       "G1 X20 Y0 E0.3 F1500\n"
+                       "G1 X30 Y0 E0.3 F1500\n");
+    }
+}
+
 // Per wipe tower region of a slice, its G1 moves as (extrudes, effective feedrate, x, y), with the
 // region's layer Z. Feedrates carry over from earlier lines, like the printer reads them.
 struct TowerMove { bool extrudes; double e; double f; double x; double y; };
