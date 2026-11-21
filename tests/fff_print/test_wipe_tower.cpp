@@ -8,6 +8,8 @@
 #include "libslic3r/Polygon.hpp"
 #include <cstddef>
 #include <limits>
+#include <map>
+#include <set>
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
 #include <regex>
@@ -1137,6 +1139,10 @@ struct SideScrape
     double low_x    = 0.; // X where the nozzle descends
     double top_z    = 0.; // Z the diagonal rises to
     double wipe_z   = -1.; // Z of the first tower extrusion after the scrape
+    double low_y    = 0.; // Y where the nozzle descends
+    double entry_x  = 0.; // where the nozzle is when the scrape starts
+    double min_x    = 0.; // X range covered by the scrape, back to the entry included
+    double max_x    = 0.;
     bool   extrudes = false;
 };
 
@@ -1154,6 +1160,7 @@ static std::vector<SideScrape> side_scrapes(const std::string &gcode, double &to
         if (raw.find("; CP TOOLCHANGE SIDE SCRAPE") != std::string_view::npos) {
             SideScrape s;
             s.marker_z = s.low_z = s.top_z = self.z();
+            s.entry_x = s.min_x = s.max_x = self.x();
             scrapes.push_back(s);
             in_scrape = true;
             return;
@@ -1165,10 +1172,14 @@ static std::vector<SideScrape> side_scrapes(const std::string &gcode, double &to
             } else {
                 SideScrape &s = scrapes.back();
                 s.extrudes |= line.extruding(self);
+                const double x = line.has_x() ? line.x() : self.x();
+                s.min_x = std::min(s.min_x, x);
+                s.max_x = std::max(s.max_x, x);
                 if (line.has_z()) {
                     if (line.z() < s.low_z) {
                         s.low_z = line.z();
-                        s.low_x = line.has_x() ? line.x() : self.x();
+                        s.low_x = x;
+                        s.low_y = line.has_y() ? line.y() : self.y();
                     }
                     s.top_z = line.z();
                 }
@@ -1200,7 +1211,7 @@ TEST_CASE("The Type 2 side scrape descends outside the tower without extruding",
     double tower_min_x = 0., tower_max_x = 0.;
     const std::vector<SideScrape> scrapes = side_scrapes(gcode, tower_min_x, tower_max_x);
     REQUIRE_FALSE(scrapes.empty());
-    bool left = false, right = false;
+    const double centre_x = 0.5 * (tower_min_x + tower_max_x);
     for (const SideScrape &s : scrapes) {
         INFO("scrape from Z " << s.marker_z << " down to Z " << s.low_z << " at X " << s.low_x << ", up to Z " << s.top_z
                               << ", next tower extrusion at Z " << s.wipe_z);
@@ -1210,14 +1221,50 @@ TEST_CASE("The Type 2 side scrape descends outside the tower without extruding",
         CHECK(s.top_z <= s.marker_z + EPSILON);
         // The diagonal ends at the height the tower is printed at, also on a compacted tower.
         CHECK(std::abs(s.wipe_z - s.top_z) < 0.002);
-        if (std::string(wall_type) == "rectangle") {
+        if (std::string(wall_type) == "rectangle")
             CHECK((s.low_x < tower_min_x || s.low_x > tower_max_x));
-            left |= s.low_x < tower_min_x;
-            right |= s.low_x > tower_max_x;
+        // The scrape uses the wall nearest to where the nozzle enters and never crosses the tower to reach it.
+        INFO("entry at X " << s.entry_x << ", scrape between X " << s.min_x << " and " << s.max_x << ", tower centre X " << centre_x);
+        if (s.entry_x > centre_x) {
+            CHECK(s.low_x > centre_x);
+            CHECK(s.min_x > centre_x);
+        } else {
+            CHECK(s.low_x < centre_x);
+            CHECK(s.max_x < centre_x);
         }
     }
-    if (std::string(wall_type) == "rectangle")
-        CHECK((left && right));
+}
+
+TEST_CASE("The side scrape spreads its start points along each wall by the point spacing", "[WipeTower]")
+{
+    // Start points per wall, in the order they are used, rounded to 0.01 mm.
+    auto starts_per_wall = [](double spacing) {
+        const std::string gcode = slice_side_scrape("type2", "rectangle", false,
+            { { "prime_tower_side_scrape", true }, { "prime_tower_side_scrape_point_spacing", spacing } });
+        double tower_min_x = 0., tower_max_x = 0.;
+        const std::vector<SideScrape> scrapes = side_scrapes(gcode, tower_min_x, tower_max_x);
+        std::map<bool, std::vector<long>> starts;
+        for (const SideScrape &s : scrapes)
+            starts[s.low_x > 0.5 * (tower_min_x + tower_max_x)].push_back(std::lround(s.low_y * 100.));
+        return starts;
+    };
+    auto distinct = [](const std::vector<long> &ys) { return std::set<long>(ys.begin(), ys.end()).size(); };
+
+    const std::map<bool, std::vector<long>> dense = starts_per_wall(0.5);
+    const std::map<bool, std::vector<long>> sparse = starts_per_wall(50.);
+    REQUIRE_FALSE(dense.empty());
+    for (const auto &[right, ys] : dense) {
+        INFO((right ? "right" : "left") << " wall, " << ys.size() << " scrapes");
+        if (ys.size() < 3)
+            continue;
+        CHECK(distinct(ys) >= 3);
+        // Consecutive scrapes on one wall never start at the same spot.
+        for (size_t i = 1; i < ys.size(); ++i)
+            CHECK(ys[i] != ys[i - 1]);
+        const auto sparse_wall = sparse.find(right);
+        if (sparse_wall != sparse.end() && sparse_wall->second.size() == ys.size())
+            CHECK(distinct(ys) > distinct(sparse_wall->second));
+    }
 }
 
 TEST_CASE("The side scrape changes nothing while it is off or the tower is Type 1", "[WipeTower]")

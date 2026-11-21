@@ -21088,8 +21088,8 @@ msgid "Side scrape point spacing"
 msgstr "Separación entre puntos del rascado lateral"
 
 # AI Translated
-msgid "Target distance between consecutive side scrape start points along one side wall. Scrape starts alternate between the left and right walls and are spread along the straight part of each wall, so the oozed filament does not pile up at a single spot."
-msgstr "Distancia objetivo entre puntos de inicio consecutivos del rascado a lo largo de una pared lateral. Los rascados alternan entre la pared izquierda y la derecha y se reparten por la parte recta de cada pared, para que el filamento goteado no se acumule en un solo punto."
+msgid "Minimum distance between neighbouring side scrape start points along one side wall. Each scrape uses the side wall nearest to where the nozzle enters the tower, and its start points are spread along the straight part of that wall, so the oozed filament does not pile up at a single spot. A straight part shorter than this distance gets a single point."
+msgstr "Distancia mínima entre puntos de inicio vecinos del rascado a lo largo de una pared lateral. Cada rascado usa la pared lateral más cercana al punto por el que la boquilla entra en la torre, y sus puntos de inicio se reparten por la parte recta de esa pared, para que el filamento goteado no se acumule en un solo punto. Si la parte recta es más corta que esta distancia, se usa un solo punto."
 
 # AI Translated
 msgid "Side scrape along-wall length"

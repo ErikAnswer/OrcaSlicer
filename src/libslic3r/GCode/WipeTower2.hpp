@@ -150,6 +150,7 @@ public:
 		if (this->is_first_layer()) {
             m_num_layer_changes = 0;
             m_num_tool_changes 	= 0;
+            m_side_scrape_count[0] = m_side_scrape_count[1] = 0u;
         } else
             ++ m_num_layer_changes;
 		
@@ -291,6 +292,7 @@ private:
     float  m_side_scrape_wall_gap         = 0.2f;
     float  m_side_scrape_point_spacing    = 1.f;
     float  m_side_scrape_along_length     = 2.f;
+    unsigned int m_side_scrape_count[2]   = {0u, 0u};
     float  m_z_offset                     = 0.f;
     // Per plan layer, each toolchange's entry position (tower-local, un-shifted frame):
     // where the wall is cut open so the entry travel does not cross the printed wall.

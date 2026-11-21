@@ -2170,7 +2170,9 @@ static std::optional<float> polygon_extreme_x(const Polygon& polygon, float y, b
 
 // Ported from BambuStudio 2.9.1 (AGPL-3.0) WipeTower::toolchange_side_scrape(), adapted to this tower:
 // only the left and right walls are used because they keep the same x on every layer, while the depth
-// of the tower (front and back walls) shrinks with height here.
+// of the tower (front and back walls) shrinks with height here. The wall nearest to the entry is used so the
+// nozzle never crosses the tower, and the start points are spread along it in bed coordinates because the
+// tower-local frame turns 180 degrees on every layer.
 void WipeTower2::toolchange_side_scrape(WipeTowerWriter2& writer)
 {
     // Clearance above the tower's first layer, which also carries the brim.
@@ -2190,10 +2192,10 @@ void WipeTower2::toolchange_side_scrape(WipeTowerWriter2& writer)
     const Polygon wall = m_wall_type == int(wtwCone) ? generate_rectange_polygon(wt_box.ld, wt_box.ru) :
                                                        generate_support_rib_wall(writer, wt_box, 0., false, m_wall_type == int(wtwRib), false);
 
-    const unsigned int slot    = unsigned(m_num_tool_changes);
-    const bool         right   = slot % 2u == 0u;
-    const float        outward = right ? 1.f : -1.f;
-    const float        nominal = right ? m_wipe_tower_width : 0.f;
+    const Vec2f entry   = writer.pos();
+    const bool  right   = entry.x() >= 0.5f * m_wipe_tower_width;
+    const float outward = right ? 1.f : -1.f;
+    const float nominal = right ? m_wipe_tower_width : 0.f;
 
     const int samples     = std::max(2, int(depth / 0.25f));
     auto      sample_y    = [depth, samples](int i) { return float(i) * depth / float(samples); };
@@ -2214,10 +2216,15 @@ void WipeTower2::toolchange_side_scrape(WipeTowerWriter2& writer)
     const float along_lo = sample_y(lo) + margin;
     const float along_hi = std::max(along_lo, sample_y(hi) - margin);
     const float span     = along_hi - along_lo;
-    const int   points   = std::clamp(int(std::lround(span / std::max(0.1f, m_side_scrape_point_spacing))), 1, 64);
-    const float along0   = along_lo + (float((slot / 2u) % unsigned(points)) + 0.5f) * span / float(points);
+    const int   points   = std::clamp(int(std::floor(span / std::max(0.1f, m_side_scrape_point_spacing) + 1e-3f)) + 1, 1, 64);
 
-    const Vec2f entry  = writer.pos();
+    const Vec2f        bed_lo = writer.rotated(Vec2f(nominal, along_lo));
+    const Vec2f        bed_hi = writer.rotated(Vec2f(nominal, along_hi));
+    unsigned int&      count  = m_side_scrape_count[bed_lo.x() >= 0.5f * m_wipe_tower_width ? 1 : 0];
+    const unsigned int index  = count++ % unsigned(points);
+    const float        t      = points > 1 ? float(index) / float(points - 1) : 0.5f;
+    const float        along0 = along_lo + (bed_hi.y() >= bed_lo.y() ? t : 1.f - t) * span;
+
     const float smear  = std::min(m_side_scrape_along_length, span);
     float       along1 = std::clamp(along0 + (entry.y() >= along0 ? smear : -smear), along_lo, along_hi);
     if (std::abs(along1 - along0) <= float(EPSILON))

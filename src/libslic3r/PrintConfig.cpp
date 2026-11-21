@@ -8786,9 +8786,10 @@ void PrintConfigDef::init_fff_params()
 
     def           = this->add("prime_tower_side_scrape_point_spacing", coFloat);
     def->label    = L("Side scrape point spacing");
-    def->tooltip  = L("Target distance between consecutive side scrape start points along one side wall. Scrape starts "
-                      "alternate between the left and right walls and are spread along the straight part of each wall, "
-                      "so the oozed filament does not pile up at a single spot.");
+    def->tooltip  = L("Minimum distance between neighbouring side scrape start points along one side wall. Each scrape uses "
+                      "the side wall nearest to where the nozzle enters the tower, and its start points are spread along "
+                      "the straight part of that wall, so the oozed filament does not pile up at a single spot. A straight "
+                      "part shorter than this distance gets a single point.");
     def->sidetext = L("mm");
     def->mode     = comAdvanced;
     def->min      = 0.5;
