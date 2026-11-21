@@ -2230,6 +2230,22 @@ void WipeTower2::toolchange_side_scrape(WipeTowerWriter2& writer)
     const float along_lo = sample_y(lo) + margin;
     const float along_hi = std::max(along_lo, sample_y(hi) - margin);
     const float span     = along_hi - along_lo;
+
+    // The cone is widest at the bottom of the descent. Like the park point beside the tower, take it as the whole
+    // ellipse the cone is cut from; once it reaches the wall the descent would land on it, so skip the scrape.
+    if (m_wall_type == int(wtwCone) && m_wipe_tower_cone_angle > 0.f) {
+        const double z_low = std::max(z_top - m_side_scrape_height, z_floor);
+        const double r     = std::tan(Geometry::deg2rad(m_wipe_tower_cone_angle / 2.f)) * (m_wipe_tower_height - z_low);
+        const double support_scale = get_wipe_tower_cone_base(m_wipe_tower_width, m_wipe_tower_height, m_wipe_tower_depth,
+                                                              m_wipe_tower_cone_angle).second;
+        const double centre_y      = 0.5 * depth;
+        const double nearest_dy    = centre_y < along_lo ? along_lo - centre_y : centre_y > along_hi ? centre_y - along_hi : 0.;
+        if (r > nearest_dy) {
+            const double cone_half_width = std::sqrt(r * r - nearest_dy * nearest_dy) / support_scale;
+            if (cone_half_width >= 0.5 * m_wipe_tower_width)
+                return;
+        }
+    }
     const int   points   = std::clamp(int(std::floor(span / std::max(0.1f, m_side_scrape_point_spacing) + 1e-3f)) + 1, 1, 64);
 
     const Vec2f        bed_lo = writer.rotated(Vec2f(nominal, along_lo));

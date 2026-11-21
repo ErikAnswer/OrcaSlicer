@@ -33,6 +33,7 @@
 #include "libslic3r/GCode/ToolOrdering.hpp"
 #include "libslic3r/GCode/WipeTower.hpp"
 #include "libslic3r/GCode/WipeTower2.hpp"
+#include "libslic3r/Geometry.hpp"
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/ModelArrange.hpp"
 #include "libslic3r/PrintConfig.hpp"
@@ -1079,12 +1080,19 @@ TEST_CASE("Smooth timelapse prints each tower layer's wall once when a layer joi
     CHECK(count_joined_layers(print) > 0);
 }
 
+struct TowerSize
+{
+    double width  = 0.;
+    double depth  = 0.;
+    double height = 0.;
+};
+
 // Two nozzles and two cubes: the short one has filament 2 on its outer walls, so every layer up to its
 // top changes tools, and the tall one has filament 2 on its top surface only, so above the short cube
 // the tower is sparse and, with sparse layers skipped, prints its last tool changes compacted far below
 // the object layer.
 static std::string slice_side_scrape(const char *tower_type, const char *wall_type, bool skip_sparse,
-                                     std::vector<ConfigBase::SetDeserializeItem> extra)
+                                     std::vector<ConfigBase::SetDeserializeItem> extra, TowerSize *tower = nullptr)
 {
     DynamicPrintConfig config = multifilament_config(2, {
         { "enable_prime_tower",          true  },
@@ -1129,7 +1137,10 @@ static std::string slice_side_scrape(const char *tower_type, const char *wall_ty
     Model model;
     init_print({ std::move(tall), std::move(low) }, print, model, config, &overrides, false);
     print.apply(model, config);
-    return Slic3r::Test::gcode(print);
+    std::string gcode = Slic3r::Test::gcode(print);
+    if (tower != nullptr)
+        *tower = { print.wipe_tower_data().width, print.wipe_tower_data().depth, print.wipe_tower_data().height };
+    return gcode;
 }
 
 struct SideScrape
@@ -1233,6 +1244,37 @@ TEST_CASE("The Type 2 side scrape descends outside the tower without extruding",
             CHECK(s.max_x < centre_x);
         }
     }
+}
+
+TEST_CASE("The side scrape is skipped while the cone reaches the wall at the bottom of the descent", "[WipeTower]")
+{
+    // A narrow tower with a wide cone: the cone passes the side walls on the low layers and falls inside them
+    // higher up, where the scrape still runs.
+    const std::vector<ConfigBase::SetDeserializeItem> narrow = {
+        { "prime_tower_side_scrape", true }, { "prime_tower_width", 10. }, { "wipe_tower_cone_angle", 90. } };
+    TowerSize tower;
+    const std::string cone_gcode = slice_side_scrape("type2", "cone", false, narrow, &tower);
+    const std::string rect_gcode = slice_side_scrape("type2", "rectangle", false, narrow);
+
+    double tower_min_x = 0., tower_max_x = 0.;
+    const std::vector<SideScrape> cone_scrapes = side_scrapes(cone_gcode, tower_min_x, tower_max_x);
+    const std::vector<SideScrape> rect_scrapes = side_scrapes(rect_gcode, tower_min_x, tower_max_x);
+    const double support_scale = WipeTower2::get_wipe_tower_cone_base(tower.width, tower.height, tower.depth, 90.).second;
+    auto cone_half_width = [&](double z) { return std::tan(Geometry::deg2rad(45.)) * (tower.height - z) / support_scale; };
+    INFO("tower " << tower.width << " x " << tower.depth << " x " << tower.height << ", cone scale " << support_scale << ", "
+                  << cone_scrapes.size() << " scrapes with the cone and " << rect_scrapes.size() << " without");
+
+    REQUIRE_FALSE(cone_scrapes.empty());
+    CHECK(cone_scrapes.size() < rect_scrapes.size());
+    REQUIRE(cone_half_width(0.6) > 0.5 * tower.width);
+    for (const SideScrape &s : cone_scrapes) {
+        INFO("scrape down to Z " << s.low_z << ", cone half width there " << cone_half_width(s.low_z));
+        CHECK(cone_half_width(s.low_z) < 0.5 * tower.width);
+    }
+    for (const SideScrape &s : rect_scrapes)
+        if (cone_half_width(s.low_z) < 0.5 * tower.width - 0.05)
+            CHECK(std::any_of(cone_scrapes.begin(), cone_scrapes.end(),
+                              [&s](const SideScrape &c) { return std::abs(c.marker_z - s.marker_z) < EPSILON; }));
 }
 
 TEST_CASE("The side scrape spreads its start points along each wall by the point spacing", "[WipeTower]")
