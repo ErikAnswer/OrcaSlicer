@@ -22,6 +22,8 @@
 #include <sstream>
 #include <iomanip>
 #include <locale>
+#include <mutex>
+#include <unordered_set>
 
 #include "libslic3r/Circle.hpp"
 #include "libslic3r/ArcFitter.hpp"
@@ -1042,6 +1044,14 @@ WipeTower::ToolChangeResult WipeTower2::construct_tcr(WipeTowerWriter2& writer,
 
 
 
+static bool first_warning_for_speed_factor_curve(const std::string& curve)
+{
+    static std::mutex                      mutex;
+    static std::unordered_set<std::string> warned;
+    std::lock_guard<std::mutex>            lock(mutex);
+    return warned.insert(curve).second;
+}
+
 std::vector<float> WipeTower2::parse_speed_factor_curve(const std::string& curve)
 {
     std::vector<float> factors;
@@ -1052,8 +1062,9 @@ std::vector<float> WipeTower2::parse_speed_factor_curve(const std::string& curve
         token_stream.imbue(std::locale::classic());
         double factor = 0.;
         if (!(token_stream >> factor) || !(token_stream >> std::ws).eof() || !(factor >= 0.01 && factor <= 5.)) {
-            BOOST_LOG_TRIVIAL(warning) << "Ignoring filament_prime_tower_speed_factor_curve \"" << curve
-                                       << "\": expected comma-separated factors between 0.01 and 5 with a decimal point";
+            if (first_warning_for_speed_factor_curve(curve))
+                BOOST_LOG_TRIVIAL(warning) << "Ignoring filament_prime_tower_speed_factor_curve \"" << curve
+                                           << "\": expected comma-separated factors between 0.01 and 5 with a decimal point";
             return {};
         }
         factors.push_back(float(factor));

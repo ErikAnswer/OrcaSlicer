@@ -1413,6 +1413,16 @@ TEST_CASE("The Type 2 tower prints its toolchange wipes at the speed factor curv
     CHECK(whole_ramps > 0);
 }
 
+TEST_CASE("An empty speed factor curve leaves the Type 2 tower G-code unchanged", "[WipeTower]")
+{
+    DynamicPrintConfig without_curve = wipe_tower_toolchange_config("marlin");
+    without_curve.set_deserialize_strict({ { "wipe_tower_type", "type2" } });
+    without_curve.erase("filament_prime_tower_speed_factor_curve");
+    DynamicPrintConfig with_empty_curve = without_curve;
+    with_empty_curve.set_key_value("filament_prime_tower_speed_factor_curve", new ConfigOptionStrings{ "", "" });
+    CHECK(sliced_wipe_tower(with_empty_curve) == sliced_wipe_tower(without_curve));
+}
+
 // The volumetric flow (mm³/s) of each extruding XY move of the toolchange wipes, from its length, its E
 // and the feedrate in force. A wipe tower region starts after a travel from the model, so its first
 // position and feedrate are unknown until its moves set them.
