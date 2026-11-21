@@ -1,12 +1,17 @@
 #include <catch2/catch_all.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "test_helpers.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include "libslic3r/Model.hpp"
+#include "libslic3r/Point.hpp"
+#include "libslic3r/Print.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/TriangleMesh.hpp"
@@ -380,6 +385,219 @@ TEST_CASE("Consistent surface keeps the overhangs of the outer wall at their spe
         begin = end;
     }
     CHECK(layers_checked > 0);
+}
+
+namespace {
+
+// Filament 1 prints a 10 mm cube at X 40..50 and filament 2 another one at X 80..90, both at Y 60..70.
+constexpr double second_cube_min_x = 65.;
+
+DynamicPrintConfig two_filament_layer_time_config(double slow_down_layer_time, double second_min_speed)
+{
+    DynamicPrintConfig config = multifilament_config(2, {
+        { "enable_prime_tower",          "0" },
+        { "use_relative_e_distances",    true },
+        { "enable_arc_fitting",          "disabled" },
+        { "enable_overhang_speed",       false },
+        { "initial_layer_print_height",  0.2 },
+        { "layer_height",                0.2 },
+        { "outer_wall_speed",            60.0 },
+        { "inner_wall_speed",            120.0 },
+        { "sparse_infill_speed",         200.0 },
+        { "internal_solid_infill_speed", 200.0 },
+        { "top_surface_speed",           200.0 },
+        { "small_perimeter_threshold",   0.0 },
+    });
+    config.set_key_value("slow_down_for_layer_cooling", new ConfigOptionBools{true, true});
+    config.set_key_value("dont_slow_down_outer_wall", new ConfigOptionBools{false, false});
+    config.set_key_value("slow_down_layer_time", new ConfigOptionFloats{slow_down_layer_time, slow_down_layer_time});
+    config.set_key_value("slow_down_min_speed", new ConfigOptionFloats{10.0, second_min_speed});
+    config.set_key_value("cooling_slowdown_logic",
+                         new ConfigOptionEnumsGeneric{(int)cslUniformCooling, (int)cslConsistentSurface});
+    config.set_key_value("layer_change_gcode", new ConfigOptionString{";TEST_LAYER=[layer_num]"});
+    return config;
+}
+
+std::string slice_two_filament_cubes(const DynamicPrintConfig &config,
+                                     const std::vector<std::vector<ConfigBase::SetDeserializeItem>> &overrides)
+{
+    std::vector<TriangleMesh> meshes;
+    for (const float x : { 40.f, 80.f }) {
+        TriangleMesh mesh = cube(10);
+        mesh.translate(Vec3f(x, 60.f, 0.f));
+        meshes.push_back(std::move(mesh));
+    }
+    Print print;
+    Model model;
+    init_print(std::move(meshes), print, model, config, &overrides, false);
+    return gcode(print);
+}
+
+struct FilamentFeedrates
+{
+    std::vector<double> outer_wall;
+    std::vector<double> other;
+};
+
+struct TwoFilamentLayers
+{
+    FilamentFeedrates   first;
+    FilamentFeedrates   second;
+    std::vector<double> layer_times;
+};
+
+// Extrusion feedrates of layers first_layer..last_layer, split by cube, and the time of each of those layers as
+// length over feedrate of every move, the model the cooling buffer stretches without accelerations.
+TwoFilamentLayers two_filament_layers(const std::string &gcode, size_t first_layer, size_t last_layer)
+{
+    TwoFilamentLayers out;
+    std::istringstream input(gcode);
+    std::string line;
+    size_t layers_seen = 0;
+    bool outer_wall = false;
+    double feedrate = 0.;
+    double x = 0.;
+    double y = 0.;
+    double z = 0.;
+    const auto in_range = [&]() { return layers_seen >= first_layer && layers_seen <= last_layer; };
+    while (std::getline(input, line)) {
+        if (line.rfind(";TEST_LAYER=", 0) == 0) {
+            ++layers_seen;
+            if (in_range())
+                out.layer_times.push_back(0.);
+            continue;
+        }
+        if (line.rfind(";TYPE:", 0) == 0) {
+            outer_wall = line == ";TYPE:Outer wall";
+            continue;
+        }
+        if (line.rfind("G1 ", 0) != 0 && line.rfind("G0 ", 0) != 0)
+            continue;
+        std::istringstream words(line.substr(0, line.find(';')));
+        std::string word;
+        words >> word;
+        double next_x = x;
+        double next_y = y;
+        double next_z = z;
+        double e = 0.;
+        while (words >> word) {
+            const double value = std::stod(word.substr(1));
+            switch (word.front()) {
+            case 'F': feedrate = value; break;
+            case 'X': next_x = value; break;
+            case 'Y': next_y = value; break;
+            case 'Z': next_z = value; break;
+            case 'E': e = value; break;
+            default: break;
+            }
+        }
+        const double xy_length = std::hypot(next_x - x, next_y - y);
+        const double length    = std::hypot(xy_length, next_z - z);
+        if (in_range() && feedrate > 0.) {
+            out.layer_times.back() += (length > 0. ? length : std::abs(e)) / (feedrate / 60.);
+            if (e > 0. && xy_length > 0.) {
+                FilamentFeedrates &filament = next_x < second_cube_min_x ? out.first : out.second;
+                (outer_wall ? filament.outer_wall : filament.other).push_back(feedrate);
+            }
+        }
+        x = next_x;
+        y = next_y;
+        z = next_z;
+    }
+    return out;
+}
+
+double max_of(const std::vector<double> &values) { return *std::max_element(values.begin(), values.end()); }
+double min_of(const std::vector<double> &values) { return *std::min_element(values.begin(), values.end()); }
+
+} // namespace
+
+TEST_CASE("Consistent surface with no minimum speed and only held outer walls lets the other filaments slow down", "[Cooling]")
+{
+    // Filament 1 (uniform, 10 mm/s minimum) prints a cube with two walls and sparse infill, so its lines run at
+    // 200, 120 and 60 mm/s; filament 2 (consistent surface, no minimum speed) prints a cube with a single wall and
+    // no infill, so a middle layer only has its held outer wall. Both at speed make a layer of about 2 s, well
+    // under the 6 s threshold, which filament 1 can reach alone at about 20 mm/s. The slow down of filament 1 goes
+    // step by step through its feedrates and meets filament 2 with nothing to stretch on every step: stopping
+    // there leaves filament 1 half slowed down, and the next pass, with filament 2 alone, fills the layer by
+    // slowing down its outer wall.
+    const double slow_down_layer_time = 6.0;
+    const DynamicPrintConfig config = two_filament_layer_time_config(slow_down_layer_time, 0.0);
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{
+        { { "extruder", "1" }, { "wall_loops", 2 }, { "sparse_infill_density", "20%" } },
+        { { "extruder", "2" }, { "wall_loops", 1 }, { "sparse_infill_density", "0%" } },
+    };
+    const double min_feedrate        = 10.0 * 60.0;
+    const double outer_wall_feedrate = 60.0 * 60.0;
+
+    const TwoFilamentLayers middle = two_filament_layers(slice_two_filament_cubes(config, overrides), 15, 35);
+
+    REQUIRE_FALSE(middle.first.outer_wall.empty());
+    REQUIRE_FALSE(middle.first.other.empty());
+    REQUIRE_FALSE(middle.second.outer_wall.empty());
+    CHECK(middle.second.other.empty());
+    for (const double feedrate : middle.second.outer_wall)
+        CHECK_THAT(feedrate, Catch::Matchers::WithinRel(outer_wall_feedrate, 0.01));
+    CHECK(max_of(middle.first.other) < outer_wall_feedrate - 1.);
+    CHECK(max_of(middle.first.outer_wall) < outer_wall_feedrate - 1.);
+    CHECK(min_of(middle.first.other) > min_feedrate + 1.);
+    for (const double layer_time : middle.layer_times)
+        CHECK(layer_time > 0.9 * slow_down_layer_time);
+}
+
+TEST_CASE("Mixed uniform and consistent surface filaments slow the held outer wall only once the rest is at its minimum", "[Cooling]")
+{
+    // Two hollow 10 mm cubes with two walls, filament 1 uniform and filament 2 consistent surface, both with a
+    // 10 mm/s minimum. A middle layer is about 40 mm of outer wall and 35 mm of inner wall per cube: about 2 s at
+    // speed, about 11.5 s with everything but the outer wall of filament 2 at the minimum and about 15 s with
+    // everything at the minimum.
+    const DynamicPrintConfig base = two_filament_layer_time_config(0.0, 10.0);
+    const std::vector<std::vector<ConfigBase::SetDeserializeItem>> overrides{
+        { { "extruder", "1" }, { "wall_loops", 2 }, { "sparse_infill_density", "0%" } },
+        { { "extruder", "2" }, { "wall_loops", 2 }, { "sparse_infill_density", "0%" } },
+    };
+    const double min_feedrate        = 10.0 * 60.0;
+    const double outer_wall_feedrate = 60.0 * 60.0;
+    const auto slice_middle_layers = [&](double slow_down_layer_time) {
+        DynamicPrintConfig config = base;
+        config.set_key_value("slow_down_layer_time", new ConfigOptionFloats{slow_down_layer_time, slow_down_layer_time});
+        return two_filament_layers(slice_two_filament_cubes(config, overrides), 15, 35);
+    };
+    const auto require_moves = [](const TwoFilamentLayers &layers) {
+        REQUIRE_FALSE(layers.first.outer_wall.empty());
+        REQUIRE_FALSE(layers.first.other.empty());
+        REQUIRE_FALSE(layers.second.outer_wall.empty());
+        REQUIRE_FALSE(layers.second.other.empty());
+    };
+
+    SECTION("the other features absorb the whole slow down")
+    {
+        const double slow_down_layer_time = 8.0;
+        const TwoFilamentLayers middle = slice_middle_layers(slow_down_layer_time);
+        require_moves(middle);
+        for (const double feedrate : middle.second.outer_wall)
+            CHECK_THAT(feedrate, Catch::Matchers::WithinRel(outer_wall_feedrate, 0.01));
+        CHECK(max_of(middle.first.outer_wall) < outer_wall_feedrate - 1.);
+        CHECK(min_of(middle.first.outer_wall) > min_feedrate + 1.);
+        CHECK(min_of(middle.first.other) > min_feedrate + 1.);
+        CHECK(min_of(middle.second.other) > min_feedrate + 1.);
+        for (const double layer_time : middle.layer_times)
+            CHECK(layer_time > 0.9 * slow_down_layer_time);
+    }
+
+    SECTION("the held outer wall takes what the other features cannot")
+    {
+        const double slow_down_layer_time = 13.5;
+        const TwoFilamentLayers middle = slice_middle_layers(slow_down_layer_time);
+        require_moves(middle);
+        for (const std::vector<double> *feedrates : { &middle.first.outer_wall, &middle.first.other, &middle.second.other })
+            for (const double feedrate : *feedrates)
+                CHECK_THAT(feedrate, Catch::Matchers::WithinRel(min_feedrate, 0.01));
+        CHECK(min_of(middle.second.outer_wall) > min_feedrate + 1.);
+        CHECK(max_of(middle.second.outer_wall) < outer_wall_feedrate - 1.);
+        for (const double layer_time : middle.layer_times)
+            CHECK(layer_time > 0.9 * slow_down_layer_time);
+    }
 }
 
 TEST_CASE("Short travel acceleration next to outer walls", "[Cooling][GCode]")
