@@ -669,10 +669,16 @@ TravelMoves travels_in_layers(const std::string &gcode, size_t first_layer, size
 
 TEST_CASE("Slow down by height limits speed and acceleration above the starting height", "[Speed][GCode]")
 {
+    const double layer_height          = 0.2;
+    const double slowdown_start_height = 5.0;
+    const double slowdown_end_height   = 10.0;
+    const double slowdown_start_speed  = 100.0;
+    const double slowdown_end_speed    = 20.0;
     DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
     config.set_deserialize_strict({
         { "gcode_flavor",                "klipper" },
-        { "layer_height",                0.2 },
+        { "initial_layer_print_height",  layer_height },
+        { "layer_height",                layer_height },
         { "slow_down_for_layer_cooling", false },
     });
     config.set_key_value("layer_change_gcode", new ConfigOptionString{";TEST_LAYER=[layer_num]"});
@@ -681,13 +687,13 @@ TEST_CASE("Slow down by height limits speed and acceleration above the starting 
     config.set_key_value("travel_acceleration", new ConfigOptionFloatsNullable{6000.0});
     config.set_key_value("travel_speed", new ConfigOptionFloatsNullable{200.0});
     config.set_key_value("wipe", new ConfigOptionBools{false});
-    config.set_key_value("slowdown_start_height", new ConfigOptionFloatsNullable{5.0});
-    config.set_key_value("slowdown_end_height", new ConfigOptionFloatsNullable{10.0});
-    config.set_key_value("slowdown_start_speed", new ConfigOptionFloatsNullable{100.0});
-    config.set_key_value("slowdown_end_speed", new ConfigOptionFloatsNullable{20.0});
+    config.set_key_value("slowdown_start_height", new ConfigOptionFloatsNullable{slowdown_start_height});
+    config.set_key_value("slowdown_end_height", new ConfigOptionFloatsNullable{slowdown_end_height});
+    config.set_key_value("slowdown_start_speed", new ConfigOptionFloatsNullable{slowdown_start_speed});
+    config.set_key_value("slowdown_end_speed", new ConfigOptionFloatsNullable{slowdown_end_speed});
     config.set_key_value("slowdown_start_acc", new ConfigOptionFloatsNullable{100000.0});
     config.set_key_value("slowdown_end_acc", new ConfigOptionFloatsNullable{1234.0});
-    const double end_feedrate = 20.0 * 60.0;
+    const double end_feedrate = slowdown_end_speed * 60.0;
     const auto   all_feedrates = [](const FeatureFeedrates &feedrates) {
         std::vector<double> all = feedrates.outer_wall;
         all.insert(all.end(), feedrates.other.begin(), feedrates.other.end());
@@ -724,12 +730,22 @@ TEST_CASE("Slow down by height limits speed and acceleration above the starting 
                       [](double a) { return a < 1234.5; }));
     CHECK(travels_in_layers(disabled, 5, 20).feedrates == travels_in_layers(enabled, 5, 20).feedrates);
 
-    const double              ramp_feedrate_at_7_mm = 70.0 * 60.0;
-    const double              ramp_feedrate_at_8_mm = 46.0 * 60.0;
-    const std::vector<double> enabled_ramp          = all_feedrates(extrusion_feedrates_in_layers(enabled, 36, 39));
-    const std::vector<double> ramp_travels          = travels_in_layers(enabled, 36, 39).feedrates;
-    REQUIRE_FALSE(ramp_travels.empty());
-    CHECK(std::all_of(enabled_ramp.begin(), enabled_ramp.end(), [&](double f) { return f < ramp_feedrate_at_7_mm + 1.; }));
-    CHECK(std::all_of(ramp_travels.begin(), ramp_travels.end(),
-                      [&](double f) { return f < ramp_feedrate_at_7_mm + 1. && f > ramp_feedrate_at_8_mm - 1.; }));
+    const size_t first_ramp_layer   = 26;
+    const size_t last_ramp_layer    = 49;
+    const double feedrate_tolerance = 0.5 * 60.0;
+    const auto   ramp_feedrate      = [&](size_t layer) {
+        const double ratio = (double(layer) * layer_height - slowdown_start_height) / (slowdown_end_height - slowdown_start_height);
+        return (slowdown_start_speed + (slowdown_end_speed - slowdown_start_speed) * ratio) * 60.0;
+    };
+    for (size_t layer = first_ramp_layer; layer <= last_ramp_layer; ++layer) {
+        CAPTURE(layer);
+        const std::vector<double> ramp_extrusions = all_feedrates(extrusion_feedrates_in_layers(enabled, layer, layer));
+        const std::vector<double> ramp_travels    = travels_in_layers(enabled, layer, layer).feedrates;
+        REQUIRE_FALSE(ramp_extrusions.empty());
+        REQUIRE_FALSE(ramp_travels.empty());
+        CHECK_THAT(*std::max_element(ramp_extrusions.begin(), ramp_extrusions.end()),
+                   Catch::Matchers::WithinAbs(ramp_feedrate(layer), feedrate_tolerance));
+        CHECK_THAT(*std::max_element(ramp_travels.begin(), ramp_travels.end()),
+                   Catch::Matchers::WithinAbs(ramp_feedrate(layer), feedrate_tolerance));
+    }
 }
