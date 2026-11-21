@@ -333,11 +333,17 @@ TEST_CASE("Consistent surface keeps the overhangs of the outer wall at their spe
 {
     // Inverted cone, 6 mm radius and 4 mm high, with a single wall: each layer reaches about 0.3 mm past the one
     // below, so the outer wall is split into outer wall and overhang wall paths. In every layer where the consistent
-    // surface logic keeps the outer wall at its speed, its overhang paths must keep theirs too.
+    // surface logic keeps the outer wall at its speed, its overhang paths must keep theirs too, also when the
+    // pressure equalizer rewrites their feedrates.
+    const double extrusion_rate_slope = GENERATE(0., 10.);
+    CAPTURE(extrusion_rate_slope);
     TriangleMesh cone = make_cone(6.0, 4.0);
     cone.mirror_z();
     DynamicPrintConfig config = layer_time_bound_config(cslConsistentSurface);
-    config.set_deserialize_strict({ { "wall_loops", 1 } });
+    config.set_deserialize_strict({
+        { "wall_loops",                          1 },
+        { "max_volumetric_extrusion_rate_slope", extrusion_rate_slope },
+    });
 
     DynamicPrintConfig reference_config = config;
     reference_config.set_key_value("slow_down_for_layer_cooling", new ConfigOptionBools{false});
