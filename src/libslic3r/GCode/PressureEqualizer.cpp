@@ -29,6 +29,7 @@ static const std::string EXTRUSION_ROLE_TAG = ";_EXTRUSION_ROLE:";
 static const std::string EXTRUDE_END_TAG = ";_EXTRUDE_END";
 static const std::string EXTRUDE_SET_SPEED_TAG = ";_EXTRUDE_SET_SPEED";
 static const std::string EXTERNAL_PERIMETER_TAG = ";_EXTERNAL_PERIMETER";
+static const std::string OUTER_WALL_OVERHANG_TAG = ";_OUTER_WALL_OVERHANG";
 
 // For how many GCode lines back will adjust a flow rate from the latest line.
 // Bigger values affect the GCode export speed a lot, and smaller values could
@@ -296,16 +297,20 @@ bool PressureEqualizer::process_line(const char *line, const char *line_end, GCo
     buf.max_volumetric_extrusion_rate_slope_positive = 0.f;
     buf.max_volumetric_extrusion_rate_slope_negative = 0.f;
 	buf.extrusion_role = m_current_extrusion_role;
+    buf.outer_wall_overhang = false;
 
     std::string str_line(line, line_end);
     const bool found_extrude_set_speed_tag = boost::contains(str_line, EXTRUDE_SET_SPEED_TAG);
     const bool found_extrude_end_tag = boost::contains(str_line, EXTRUDE_END_TAG);
     assert(!found_extrude_set_speed_tag || !found_extrude_end_tag);
 
-    if (found_extrude_set_speed_tag)
-        this->opened_extrude_set_speed_block = true;
-    else if (found_extrude_end_tag)
-        this->opened_extrude_set_speed_block = false;
+    if (found_extrude_set_speed_tag) {
+        this->opened_extrude_set_speed_block   = true;
+        this->opened_outer_wall_overhang_block = boost::contains(str_line, OUTER_WALL_OVERHANG_TAG);
+    } else if (found_extrude_end_tag) {
+        this->opened_extrude_set_speed_block   = false;
+        this->opened_outer_wall_overhang_block = false;
+    }
 
     // Parse the G-code line, store the result into the buf.
     switch (toupper(*line ++)) {
@@ -329,6 +334,7 @@ bool PressureEqualizer::process_line(const char *line, const char *line_end, GCo
             buf.adjustable_flow = this->opened_extrude_set_speed_block;
             buf.extrude_set_speed_tag = found_extrude_set_speed_tag;
             buf.extrude_end_tag = found_extrude_end_tag;
+            buf.outer_wall_overhang = this->opened_outer_wall_overhang_block;
             float new_pos[5];
             memcpy(new_pos, m_current_pos, sizeof(float)*5);
             bool  changed[5] = { false, false, false, false, false };
@@ -952,6 +958,8 @@ void PressureEqualizer::push_line_to_output(const size_t line_idx, float new_fee
     feedrate_formatter.emit_string(std::string(EXTRUDE_SET_SPEED_TAG.data(), EXTRUDE_SET_SPEED_TAG.length()));
     if (line.extrusion_role == ExtrusionRole::erExternalPerimeter)
         feedrate_formatter.emit_string(std::string(EXTERNAL_PERIMETER_TAG.data(), EXTERNAL_PERIMETER_TAG.length()));
+    else if (line.outer_wall_overhang)
+        feedrate_formatter.emit_string(std::string(OUTER_WALL_OVERHANG_TAG.data(), OUTER_WALL_OVERHANG_TAG.length()));
     push_to_output(feedrate_formatter);
 
     GCodeG1Formatter extrusion_formatter(high_precision);

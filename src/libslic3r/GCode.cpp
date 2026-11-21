@@ -156,6 +156,29 @@ namespace Slic3r {
 
 namespace {
 
+// Orca: Overhang paths share one role on every wall, so the inset index tells the outer wall apart where set.
+template<class PathOwner>
+bool holds_outer_wall(const PathOwner &owner)
+{
+    if (owner.inset_idx >= 0)
+        return owner.inset_idx == 0;
+    return std::any_of(owner.paths.begin(), owner.paths.end(),
+                       [](const ExtrusionPath &path) { return is_external_perimeter(path.role()); });
+}
+
+class ScopedFlag
+{
+public:
+    ScopedFlag(bool &flag, bool value) : m_flag(flag), m_previous(flag) { m_flag = value; }
+    ~ScopedFlag() { m_flag = m_previous; }
+    ScopedFlag(const ScopedFlag &) = delete;
+    ScopedFlag &operator=(const ScopedFlag &) = delete;
+
+private:
+    bool &m_flag;
+    bool  m_previous;
+};
+
 // Follow XY commands in a generated G-code block. This deliberately handles
 // only standard motion/modal commands: an opaque macro that moves the head is
 // already outside the position guarantees made by GCodeWriter.
@@ -8549,6 +8572,7 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
     // get a copy; don't modify the orientation of the original loop object otherwise
     // next copies (if any) would not detect the correct orientation
     ExtrusionLoop loop = loop_ref;
+    const ScopedFlag extruding_outer_wall(m_extruding_outer_wall, holds_outer_wall(loop_ref));
 
     bool is_hole = (loop.loop_role() & elrHole) == elrHole;
 
@@ -8861,6 +8885,7 @@ std::string GCode::extrude_loop(const ExtrusionLoop&                       loop_
 
 std::string GCode::extrude_multi_path(const ExtrusionMultiPath& multipath, const std::string& description, double speed)
 {
+    const ScopedFlag extruding_outer_wall(m_extruding_outer_wall, holds_outer_wall(multipath));
     // extrude along the path
     std::string gcode;
 
@@ -9972,6 +9997,8 @@ std::string GCode::_extrude_piece(const ExtrusionPath &path, const std::string &
         comment = ";_EXTRUDE_SET_SPEED";
         if (is_external_perimeter(path.role()))
             comment += ";_EXTERNAL_PERIMETER";
+        else if (path.role() == erOverhangPerimeter && m_extruding_outer_wall)
+            comment += ";_OUTER_WALL_OVERHANG";
     }
 
     // Change fan speed based on current extrusion role
