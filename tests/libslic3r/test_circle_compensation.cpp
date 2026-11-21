@@ -24,6 +24,16 @@ Polygon circle(double cx, double cy, double radius, bool counter_clockwise = tru
     return polygon;
 }
 
+Polygon ellipse(double cx, double cy, double radius_x, double radius_y, size_t segments = 128)
+{
+    std::vector<Vec2d> points;
+    for (size_t i = 0; i < segments; ++i) {
+        const double angle = 2. * M_PI * double(i) / double(segments);
+        points.emplace_back(cx + radius_x * std::cos(angle), cy + radius_y * std::sin(angle));
+    }
+    return Polygon::new_scale(points);
+}
+
 Polygon square(double cx, double cy, double half)
 {
     return Polygon::new_scale({ { cx - half, cy - half }, { cx + half, cy - half }, { cx + half, cy + half }, { cx - half, cy + half } });
@@ -226,6 +236,17 @@ TEST_CASE("Circle compensation finds the walls of compensated circles", "[Circle
     SECTION("walls elsewhere do not match") {
         REQUIRE_FALSE(is_compensated_loop(circle(1., 0., 4.6), false, found));
         REQUIRE_FALSE(is_compensated_loop(square(10., 10., 1.), false, found));
+    }
+
+    SECTION("concentric walls that are not circles do not match") {
+        REQUIRE_FALSE(is_compensated_loop(ellipse(0., 0., 4.6, 3.6), false, found));
+        REQUIRE_FALSE(is_compensated_loop(square(0., 0., 3.), false, found));
+        REQUIRE_FALSE(is_compensated_loop(ellipse(0., 0., 3.4, 2.4), true, found));
+    }
+
+    SECTION("concentric circles outside the material do not match") {
+        REQUIRE_FALSE(is_compensated_loop(circle(0., 0., 6.), false, found));
+        REQUIRE_FALSE(is_compensated_loop(circle(0., 0., 1.5, false), true, found));
     }
 
     SECTION("a surface whose circles were not compensated has none") {
