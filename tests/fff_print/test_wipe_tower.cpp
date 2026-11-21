@@ -1489,14 +1489,14 @@ TEST_CASE("The prime tower tail slowdown leaves a visit alone at full speed", "[
 {
     const std::string visit = "G1 X10 Y0 E1 F3000\nG1 X20 Y0 E1\n";
     std::string gcode = visit;
-    WipeTower2::apply_tail_slowdown(gcode, 10.f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    WipeTower2::apply_tail_slowdown(gcode, 10.f, 1.f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
     CHECK(gcode == visit);
 }
 
 TEST_CASE("The prime tower tail slowdown splits the move that crosses the tail volume", "[WipeTower]")
 {
     std::string gcode = "G1 X10 Y0 E1 F3000\nG1 X20 Y0 E1\nG1 E-0.8\nG1 X30 Y5\n";
-    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
     CHECK(gcode == "G1 X10 Y0 E1 F3000\n"
                    "G1 X15.000 Y0.000 E0.50000\n"
                    "G1 X20.000 Y0.000 E0.50000 F1500\n"
@@ -1507,7 +1507,7 @@ TEST_CASE("The prime tower tail slowdown splits the move that crosses the tail v
 TEST_CASE("The prime tower tail slowdown slows every extrusion of the visit with a zero volume", "[WipeTower]")
 {
     std::string gcode = "G1 X10 Y0 F9000\nG1 X20 Y0 E1 F3000\nG1 X20 Y10 E1 F2000 ; wall\nG1 X0 Y10\n";
-    WipeTower2::apply_tail_slowdown(gcode, 0.f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    WipeTower2::apply_tail_slowdown(gcode, 0.f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
     CHECK(gcode == "G1 X10 Y0 F9000\n"
                    "G1 X20 Y0 E1 F1500\n"
                    "G1 X20 Y10 E1 F1000 ; wall\n"
@@ -1517,7 +1517,7 @@ TEST_CASE("The prime tower tail slowdown slows every extrusion of the visit with
 TEST_CASE("The prime tower tail slowdown slows a move from the feedrate a retraction left", "[WipeTower]")
 {
     std::string gcode = "G1 X10 Y0 F600\nG1 E-0.8 F2400\nG1 X20 Y0 E1\n";
-    WipeTower2::apply_tail_slowdown(gcode, 0.f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+    WipeTower2::apply_tail_slowdown(gcode, 0.f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
     CHECK(gcode == "G1 X10 Y0 F600\n"
                    "G1 E-0.8 F2400\n"
                    "G1 X20 Y0 E1 F1200\n");
@@ -1526,11 +1526,31 @@ TEST_CASE("The prime tower tail slowdown slows a move from the feedrate a retrac
 TEST_CASE("The prime tower tail slowdown restarts from the tool change position after the placeholder", "[WipeTower]")
 {
     std::string gcode = "G1 X50 Y50 F9000\n[change_filament_gcode]\nG1 X15 Y5 E1 F3000\n";
-    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, Vec2f::Zero(), Vec2f(5.f, 5.f));
+    WipeTower2::apply_tail_slowdown(gcode, 0.5f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f(5.f, 5.f));
     CHECK(gcode == "G1 X50 Y50 F9000\n"
                    "[change_filament_gcode]\n"
                    "G1 X10.000 Y5.000 E0.50000 F3000\n"
                    "G1 X15.000 Y5.000 E0.50000 F1500\n");
+}
+
+TEST_CASE("The prime tower tail slowdown measures each side of the filament change with its own filament area", "[WipeTower]")
+{
+    const std::string visit = "G1 X10 Y0 E1 F3000\n[change_filament_gcode]\nG1 X10 Y10 E1 F3000\n";
+    SECTION("thicker filament before the change") {
+        std::string gcode = visit;
+        WipeTower2::apply_tail_slowdown(gcode, 1.5f, 0.5f, 2.f, 1.f, Vec2f::Zero(), Vec2f(10.f, 0.f));
+        CHECK(gcode == "G1 X7.500 Y0.000 E0.75000 F3000\n"
+                       "G1 X10.000 Y0.000 E0.25000 F1500\n"
+                       "[change_filament_gcode]\n"
+                       "G1 X10 Y10 E1 F1500\n");
+    }
+    SECTION("thinner filament before the change") {
+        std::string gcode = visit;
+        WipeTower2::apply_tail_slowdown(gcode, 1.5f, 0.5f, 0.5f, 1.f, Vec2f::Zero(), Vec2f(10.f, 0.f));
+        CHECK(gcode == "G1 X10 Y0 E1 F1500\n"
+                       "[change_filament_gcode]\n"
+                       "G1 X10 Y10 E1 F1500\n");
+    }
 }
 
 TEST_CASE("The prime tower tail slowdown never writes a split point that prints as one of the move's ends", "[WipeTower]")
@@ -1538,12 +1558,12 @@ TEST_CASE("The prime tower tail slowdown never writes a split point that prints 
     SECTION("tail too short") {
         const std::string visit = "G1 X10 Y0 E1 F3000\n";
         std::string gcode = visit;
-        WipeTower2::apply_tail_slowdown(gcode, 0.00001f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+        WipeTower2::apply_tail_slowdown(gcode, 0.00001f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
         CHECK(gcode == visit);
     }
     SECTION("head too short") {
         std::string gcode = "G1 X10 Y0 E1 F3000\n";
-        WipeTower2::apply_tail_slowdown(gcode, 0.99996f, 0.5f, 1.f, Vec2f::Zero(), Vec2f::Zero());
+        WipeTower2::apply_tail_slowdown(gcode, 0.99996f, 0.5f, 1.f, 1.f, Vec2f::Zero(), Vec2f::Zero());
         CHECK(gcode == "G1 X10 Y0 E1 F1500\n");
     }
 }
