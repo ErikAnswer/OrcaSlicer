@@ -97,6 +97,8 @@ private:
     // Indicate if extrude set speed block was opened using the tag ";_EXTRUDE_SET_SPEED"
     // or not (not opened, or it was closed using the tag ";_EXTRUDE_END").
     bool                            opened_extrude_set_speed_block = false;
+    // Set while the open ";_EXTRUDE_SET_SPEED" block belongs to an overhang of an outer wall (";_OUTER_WALL_OVERHANG").
+    bool                            opened_outer_wall_overhang_block = false;
 
     enum GCodeLineType {
         GCODELINETYPE_INVALID,
@@ -180,6 +182,7 @@ private:
 
         bool        extrude_set_speed_tag = false;
         bool        extrude_end_tag       = false;
+        bool        outer_wall_overhang   = false;
     };
 
     // Output buffer will only grow. It will not be reallocated over and over.

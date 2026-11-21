@@ -235,6 +235,50 @@ FeatureFeedrates extrusion_feedrates_after_first_layers(const std::string &gcode
     return extrusion_feedrates_in_layers(gcode, 3, std::numeric_limits<size_t>::max());
 }
 
+struct ExtrusionMove
+{
+    size_t      layer;
+    std::string type;
+    double      feedrate;
+};
+
+std::vector<ExtrusionMove> extrusion_moves(const std::string &gcode)
+{
+    std::vector<ExtrusionMove> out;
+    std::istringstream input(gcode);
+    std::string line;
+    size_t layers_seen = 0;
+    std::string type;
+    double feedrate = 0.;
+    while (std::getline(input, line)) {
+        if (line.rfind(";TEST_LAYER=", 0) == 0) {
+            ++layers_seen;
+            continue;
+        }
+        if (line.rfind(";TYPE:", 0) == 0) {
+            type = line.substr(6);
+            continue;
+        }
+        if (line.rfind("G1 ", 0) != 0)
+            continue;
+        std::istringstream words(line.substr(0, line.find(';')));
+        std::string word;
+        bool extrudes = false;
+        bool moves_xy = false;
+        while (words >> word) {
+            if (word.front() == 'F')
+                feedrate = std::stod(word.substr(1));
+            else if (word.front() == 'E' && std::stod(word.substr(1)) > 0.)
+                extrudes = true;
+            else if (word.front() == 'X' || word.front() == 'Y')
+                moves_xy = true;
+        }
+        if (extrudes && moves_xy)
+            out.push_back({ layers_seen, type, feedrate });
+    }
+    return out;
+}
+
 } // namespace
 
 TEST_CASE("Consistent surface slowdown keeps the outer wall speed", "[Cooling]")
@@ -283,6 +327,53 @@ TEST_CASE("Consistent surface slows the outer wall once nothing else is left", "
                       [&](double f) { return std::abs(f - min_feedrate) < 1.; }));
     CHECK(std::all_of(middle.outer_wall.begin(), middle.outer_wall.end(),
                       [&](double f) { return f > min_feedrate + 1. && f < outer_wall_feedrate - 1.; }));
+}
+
+TEST_CASE("Consistent surface keeps the overhangs of the outer wall at their speed", "[Cooling]")
+{
+    // Inverted cone, 6 mm radius and 4 mm high, with a single wall: each layer reaches about 0.3 mm past the one
+    // below, so the outer wall is split into outer wall and overhang wall paths. In every layer where the consistent
+    // surface logic keeps the outer wall at its speed, its overhang paths must keep theirs too.
+    TriangleMesh cone = make_cone(6.0, 4.0);
+    cone.mirror_z();
+    DynamicPrintConfig config = layer_time_bound_config(cslConsistentSurface);
+    config.set_deserialize_strict({ { "wall_loops", 1 } });
+
+    DynamicPrintConfig reference_config = config;
+    reference_config.set_key_value("slow_down_for_layer_cooling", new ConfigOptionBools{false});
+
+    const std::string consistent_gcode = slice({ cone }, config);
+    const std::vector<ExtrusionMove> consistent = extrusion_moves(consistent_gcode);
+    const std::vector<ExtrusionMove> reference  = extrusion_moves(slice({ cone }, reference_config));
+    REQUIRE(consistent.size() == reference.size());
+    CHECK(consistent_gcode.find(";_OUTER_WALL_OVERHANG") == std::string::npos);
+
+    const auto same_speed = [](double lhs, double rhs) { return std::abs(lhs - rhs) < 1.; };
+    size_t layers_checked = 0;
+    for (size_t begin = 0; begin < consistent.size();) {
+        size_t end = begin;
+        while (end < consistent.size() && consistent[end].layer == consistent[begin].layer)
+            ++end;
+        bool outer_wall_held = true;
+        bool slowed_down     = false;
+        bool has_overhang    = false;
+        for (size_t i = begin; i < end; ++i) {
+            const bool kept = same_speed(consistent[i].feedrate, reference[i].feedrate);
+            slowed_down |= !kept;
+            if (consistent[i].type == "Outer wall")
+                outer_wall_held &= kept;
+            else if (consistent[i].type == "Overhang wall")
+                has_overhang = true;
+        }
+        if (outer_wall_held && slowed_down && has_overhang) {
+            ++layers_checked;
+            for (size_t i = begin; i < end; ++i)
+                if (consistent[i].type == "Overhang wall")
+                    CHECK(same_speed(consistent[i].feedrate, reference[i].feedrate));
+        }
+        begin = end;
+    }
+    CHECK(layers_checked > 0);
 }
 
 TEST_CASE("Short travel acceleration next to outer walls", "[Cooling][GCode]")

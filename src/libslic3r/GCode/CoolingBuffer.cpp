@@ -95,6 +95,8 @@ struct CoolingLine
         // Belt printers: extrusions within the first-layer band above the belt.
         TYPE_BELT_BAND_START           = 1 << 21,
         TYPE_BELT_BAND_END             = 1 << 22,
+        // Overhang segment of an outer wall, held at its speed together with the outer wall by the consistent surface logic.
+        TYPE_OUTER_WALL_OVERHANG       = 1 << 23,
     };
 
     CoolingLine(unsigned int type, size_t  line_start, size_t  line_end) :
@@ -103,7 +105,7 @@ struct CoolingLine
 
     bool adjustable(bool slowdown_external_perimeters) const {
         return (this->type & TYPE_ADJUSTABLE) &&
-               (! (this->type & TYPE_EXTERNAL_PERIMETER) || slowdown_external_perimeters) &&
+               (! (this->type & (TYPE_EXTERNAL_PERIMETER | TYPE_OUTER_WALL_OVERHANG)) || slowdown_external_perimeters) &&
                this->time < this->time_max;
     }
 
@@ -454,6 +456,8 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
                 line.type |= CoolingLine::TYPE_EXTERNAL_PERIMETER;
             if (wipe)
                 line.type |= CoolingLine::TYPE_WIPE;
+            if (boost::contains(sline, ";_OUTER_WALL_OVERHANG"))
+                line.type |= CoolingLine::TYPE_OUTER_WALL_OVERHANG;
 
             // Orca: only slow down movements since the first extrusion
             if (boost::contains(sline, ";_EXTRUDE_SET_SPEED"))
@@ -1042,7 +1046,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
         }
         else if (line->type & CoolingLine::TYPE_EXTRUDE_END) {
             // Just remove this comment.
-        } else if (line->type & (CoolingLine::TYPE_ADJUSTABLE | CoolingLine::TYPE_EXTERNAL_PERIMETER | CoolingLine::TYPE_WIPE | CoolingLine::TYPE_HAS_F)) {
+        } else if (line->type & (CoolingLine::TYPE_ADJUSTABLE | CoolingLine::TYPE_EXTERNAL_PERIMETER | CoolingLine::TYPE_OUTER_WALL_OVERHANG | CoolingLine::TYPE_WIPE | CoolingLine::TYPE_HAS_F)) {
             // Find the start of a comment, or roll to the end of line.
             const char *end = line_start;
             for (; end < line_end && *end != ';'; ++ end);
@@ -1057,7 +1061,7 @@ std::string CoolingBuffer::apply_layer_cooldown(
             new_feedrate = line->slowdown ? int(floor(60. * line->feedrate + 0.5)) : atoi(fpos);
             if (new_feedrate == current_feedrate) {
                 // No need to change the F value.
-                if ((line->type & (CoolingLine::TYPE_ADJUSTABLE | CoolingLine::TYPE_EXTERNAL_PERIMETER | CoolingLine::TYPE_WIPE)) || line->length == 0.)
+                if ((line->type & (CoolingLine::TYPE_ADJUSTABLE | CoolingLine::TYPE_EXTERNAL_PERIMETER | CoolingLine::TYPE_OUTER_WALL_OVERHANG | CoolingLine::TYPE_WIPE)) || line->length == 0.)
                     // Feedrate does not change and this line does not move the print head. Skip the complete G-code line including the G-code comment.
                     end = line_end;
                 else
@@ -1107,12 +1111,14 @@ std::string CoolingBuffer::apply_layer_cooldown(
             }
             // Process the rest of the line.
             if (end < line_end) {
-                if (line->type & (CoolingLine::TYPE_ADJUSTABLE | CoolingLine::TYPE_EXTERNAL_PERIMETER | CoolingLine::TYPE_WIPE)) {
-                    // Process comments, remove ";_EXTRUDE_SET_SPEED", ";_EXTERNAL_PERIMETER", ";_WIPE"
+                if (line->type & (CoolingLine::TYPE_ADJUSTABLE | CoolingLine::TYPE_EXTERNAL_PERIMETER | CoolingLine::TYPE_OUTER_WALL_OVERHANG | CoolingLine::TYPE_WIPE)) {
+                    // Process comments, remove ";_EXTRUDE_SET_SPEED", ";_EXTERNAL_PERIMETER", ";_OUTER_WALL_OVERHANG", ";_WIPE"
                     std::string comment(end, line_end);
                     boost::replace_all(comment, ";_EXTRUDE_SET_SPEED", "");
                     if (line->type & CoolingLine::TYPE_EXTERNAL_PERIMETER)
                         boost::replace_all(comment, ";_EXTERNAL_PERIMETER", "");
+                    if (line->type & CoolingLine::TYPE_OUTER_WALL_OVERHANG)
+                        boost::replace_all(comment, ";_OUTER_WALL_OVERHANG", "");
                     if (line->type & CoolingLine::TYPE_WIPE)
                         boost::replace_all(comment, ";_WIPE", "");
                     new_gcode += comment;
