@@ -34,6 +34,38 @@ double pin_diameter(const std::string &enabled, const std::string &contour_const
     return unscale<double>(diameter);
 }
 
+struct FirstLayerDiameters
+{
+    double outline{ 0. };
+    double region{ 0. };
+};
+
+FirstLayerDiameters first_layer_pin_diameters(const std::string &enabled, const std::string &contour_constant)
+{
+    Print print;
+    Model model;
+    Test::init_print({ make_cylinder(4., 4.) }, print, model,
+                     { { "enable_circle_compensation", enabled },
+                       { "counter_coef_3", contour_constant },
+                       { "elefant_foot_compensation", "0.2" },
+                       { "elefant_foot_compensation_layers", "1" },
+                       { "layer_height", "0.2" },
+                       { "initial_layer_print_height", "0.2" } });
+    print.process();
+    const Layer *layer = print.objects().front()->layers().front();
+    REQUIRE(layer->lslices.size() == 1);
+    REQUIRE(layer->regions().size() == 1);
+    REQUIRE(layer->regions().front()->slices.surfaces.size() == 1);
+    FirstLayerDiameters diameters;
+    Point               center;
+    double              diameter = 0.;
+    REQUIRE(is_approx_circle(layer->lslices.front().contour, center, diameter));
+    diameters.outline = unscale<double>(diameter);
+    REQUIRE(is_approx_circle(layer->regions().front()->slices.surfaces.front().expolygon.contour, center, diameter));
+    diameters.region = unscale<double>(diameter);
+    return diameters;
+}
+
 size_t compensated_loops(const Layer &layer)
 {
     size_t count = 0;
@@ -82,6 +114,23 @@ TEST_CASE("Circle compensation resizes a sliced cylinder only when enabled", "[C
     REQUIRE(pin_diameter("1", "0") == Catch::Approx(reference).margin(1e-6));
     REQUIRE(pin_diameter("1", "0.1") == Catch::Approx(reference + 0.2).margin(0.005));
     REQUIRE(pin_diameter("1", "-0.1") == Catch::Approx(reference - 0.2).margin(0.005));
+}
+
+TEST_CASE("Circle compensation also resizes the first layer outline kept for the elephant foot", "[CircleCompensation]")
+{
+    const FirstLayerDiameters reference = first_layer_pin_diameters("0", "0");
+    REQUIRE(reference.region < reference.outline);
+
+    const FirstLayerDiameters neutral = first_layer_pin_diameters("1", "0");
+    REQUIRE(neutral.outline == Catch::Approx(reference.outline).margin(1e-6));
+
+    const FirstLayerDiameters bigger = first_layer_pin_diameters("1", "0.1");
+    REQUIRE(bigger.outline == Catch::Approx(reference.outline + 0.2).margin(0.005));
+    REQUIRE(bigger.region == Catch::Approx(reference.region + 0.2).margin(0.005));
+
+    const FirstLayerDiameters smaller = first_layer_pin_diameters("1", "-0.1");
+    REQUIRE(smaller.outline == Catch::Approx(reference.outline - 0.2).margin(0.005));
+    REQUIRE(smaller.region == Catch::Approx(reference.region - 0.2).margin(0.005));
 }
 
 TEST_CASE("Circle compensation prints the walls of compensated circles at their own speed", "[CircleCompensation]")

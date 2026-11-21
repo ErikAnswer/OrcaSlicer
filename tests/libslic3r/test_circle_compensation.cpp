@@ -241,3 +241,65 @@ TEST_CASE("Circle compensation finds the walls of compensated circles", "[Circle
         REQUIRE_FALSE(is_compensated_loop(circle(0., 0., 2.4, false), true, contour));
     }
 }
+
+TEST_CASE("Circle compensation applies the correction of each region to the layer outline", "[CircleCompensation]")
+{
+    const ExPolygon outline(circle(0., 0., 10.), circle(0., 0., 4., false));
+    const double    elephant_foot = scale_(0.2);
+
+    CircleBoundaries compensated;
+    compensated.push_back({ Point::new_scale(0., 0.), scale_(19.6 + 0.2), false, scale_(0.1) });
+    compensated.push_back({ Point::new_scale(0., 0.), scale_(8.4 - 0.1), true, scale_(-0.05) });
+
+    SECTION("each circle takes the correction of the region it belongs to") {
+        const ExPolygon result = apply_compensated_circles(outline, compensated, elephant_foot);
+        REQUIRE(measured_diameter(result.contour) == Catch::Approx(20.2).margin(0.01));
+        REQUIRE(result.holes.size() == 1);
+        REQUIRE(measured_diameter(result.holes.front()) == Catch::Approx(7.9).margin(0.01));
+    }
+
+    SECTION("a circle no region changed is left alone") {
+        CircleBoundaries only_contour{ compensated.front() };
+        only_contour.push_back({ Point::new_scale(0., 0.), scale_(8.4), true, 0. });
+        const ExPolygon result = apply_compensated_circles(outline, only_contour, elephant_foot);
+        REQUIRE(measured_diameter(result.contour) == Catch::Approx(20.2).margin(0.01));
+        REQUIRE(result.holes.front().points == outline.holes.front().points);
+    }
+
+    SECTION("circles of another island with the same center are not mixed up") {
+        CircleBoundaries nested = compensated;
+        nested.push_back({ Point::new_scale(0., 0.), scale_(5.6 - 0.6), false, scale_(-0.3) });
+        const ExPolygon result = apply_compensated_circles(outline, nested, elephant_foot);
+        REQUIRE(measured_diameter(result.contour) == Catch::Approx(20.2).margin(0.01));
+    }
+
+    SECTION("a circle that differs more than the offset is not matched") {
+        const ExPolygon result = apply_compensated_circles(outline, compensated, 0.);
+        REQUIRE(result.contour.points == outline.contour.points);
+        REQUIRE(result.holes.front().points == outline.holes.front().points);
+    }
+
+    SECTION("without compensated circles nothing changes") {
+        const ExPolygon result = apply_compensated_circles(outline, {}, elephant_foot);
+        REQUIRE(result.contour.points == outline.contour.points);
+    }
+}
+
+TEST_CASE("Circle compensation records the correction it applies", "[CircleCompensation]")
+{
+    const ExPolygon          tube(circle(0., 0., 5.), circle(0., 0., 2., false));
+    CircleCompensationParams params = neutral_params();
+    params.contour_constant         = 0.1;
+    params.hole_constant            = -0.05;
+    CircleBoundaries handled;
+    compensate_circles(tube, params, nullptr, &handled);
+    REQUIRE(handled.size() == 2);
+    REQUIRE(unscale<double>(handled[0].correction) == Catch::Approx(0.1).margin(1e-6));
+    REQUIRE(unscale<double>(handled[1].correction) == Catch::Approx(-0.05).margin(1e-6));
+
+    CircleBoundaries untouched;
+    compensate_circles(tube, neutral_params(), nullptr, &untouched);
+    REQUIRE(untouched.size() == 2);
+    REQUIRE(untouched[0].correction == 0.);
+    REQUIRE(untouched[1].correction == 0.);
+}

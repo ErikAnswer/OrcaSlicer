@@ -191,7 +191,7 @@ public:
     // Test whether whether there are any slices assigned to this layer.
     bool                    empty() const;
     void                    make_slices();
-    void                    apply_circle_compensation(ExPolygons *elephant_foot_uncompensated);
+    void                    apply_circle_compensation(ExPolygons *elephant_foot_uncompensated, double outline_offset);
     // Backup and restore raw sliced regions if needed.
     //FIXME Review whether not to simplify the code by keeping the raw_slices all the time.
     void                    backup_untyped_slices();
