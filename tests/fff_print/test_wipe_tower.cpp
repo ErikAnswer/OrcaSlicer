@@ -1252,19 +1252,22 @@ TEST_CASE("The side scrape spreads its start points along each wall by the point
 
     const std::map<bool, std::vector<long>> dense = starts_per_wall(0.5);
     const std::map<bool, std::vector<long>> sparse = starts_per_wall(50.);
-    REQUIRE_FALSE(dense.empty());
+    size_t walls_checked = 0;
     for (const auto &[right, ys] : dense) {
         INFO((right ? "right" : "left") << " wall, " << ys.size() << " scrapes");
         if (ys.size() < 3)
             continue;
+        ++walls_checked;
         CHECK(distinct(ys) >= 3);
         // Consecutive scrapes on one wall never start at the same spot.
         for (size_t i = 1; i < ys.size(); ++i)
             CHECK(ys[i] != ys[i - 1]);
         const auto sparse_wall = sparse.find(right);
-        if (sparse_wall != sparse.end() && sparse_wall->second.size() == ys.size())
-            CHECK(distinct(ys) > distinct(sparse_wall->second));
+        REQUIRE(sparse_wall != sparse.end());
+        REQUIRE(sparse_wall->second.size() == ys.size());
+        CHECK(distinct(ys) > distinct(sparse_wall->second));
     }
+    REQUIRE(walls_checked > 0);
 }
 
 TEST_CASE("The side scrape changes nothing while it is off or the tower is Type 1", "[WipeTower]")
