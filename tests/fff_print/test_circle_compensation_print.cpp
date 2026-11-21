@@ -374,6 +374,8 @@ TEST_CASE("Circle compensation leaves the wall speeds alone when disabled or wit
     const PartSlice off   = slice_part(part, wall_generator, { { setting, "0" } });
     const WallFeeds feeds = wall_feeds(off.gcode, middle_layer_z, circle_reach);
     REQUIRE(feeds.circle == std::set<int>{ 3600, 4800 });
+    if (part == CirclePart::Hole)
+        REQUIRE(feeds.other == std::set<int>{ 3600, 4800 });
     if (setting == "enable_circle_compensation")
         REQUIRE(off.compensated_loops == 0);
 }
