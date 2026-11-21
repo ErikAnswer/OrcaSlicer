@@ -1413,6 +1413,68 @@ TEST_CASE("The Type 2 tower prints its toolchange wipes at the speed factor curv
     CHECK(whole_ramps > 0);
 }
 
+// The volumetric flow (mm³/s) of each extruding XY move of the toolchange wipes, from its length, its E
+// and the feedrate in force. A wipe tower region starts after a travel from the model, so its first
+// position and feedrate are unknown until its moves set them.
+static std::vector<double> toolchange_wipe_flows(const std::string &tower, double filament_area)
+{
+    const std::string &region_start = GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Wipe_Tower_Start);
+    std::vector<double> flows;
+    bool   in_wipe = false, known_x = false, known_y = false;
+    double x = 0., y = 0., f = 0.;
+    std::istringstream lines(tower);
+    for (std::string line; std::getline(lines, line);) {
+        if (line.find(region_start) != std::string::npos) {
+            in_wipe = known_x = known_y = false;
+            f = 0.;
+            continue;
+        }
+        if (line.rfind("; CP", 0) == 0) {
+            in_wipe = line.rfind("; CP TOOLCHANGE WIPE", 0) == 0;
+            continue;
+        }
+        const bool linear = line.rfind("G1", 0) == 0;
+        if (! linear && line.rfind("G2", 0) != 0 && line.rfind("G3", 0) != 0)
+            continue;
+        std::istringstream tokens(line.substr(0, line.find(';')));
+        bool   has_x = false, has_y = false;
+        double nx = x, ny = y, e = 0.;
+        for (std::string token; tokens >> token;) {
+            const double value = token.size() > 1 ? string_to_double_decimal_point(std::string_view(token).substr(1)) : 0.;
+            switch (token[0]) {
+            case 'X': nx = value; has_x = true; break;
+            case 'Y': ny = value; has_y = true; break;
+            case 'E': e = value; break;
+            case 'F': f = value; break;
+            default: break;
+            }
+        }
+        const double length = std::hypot(nx - x, ny - y);
+        if (linear && in_wipe && known_x && known_y && e > 0. && f > 0. && length > 0.5)
+            flows.push_back(e * filament_area / length * f / 60.);
+        x = nx;
+        y = ny;
+        known_x = known_x || has_x;
+        known_y = known_y || has_y;
+    }
+    return flows;
+}
+
+TEST_CASE("A fast speed factor curve keeps the toolchange wipes under the filament's max volumetric speed", "[WipeTower]")
+{
+    const double max_volumetric_speed = 2.;
+    DynamicPrintConfig config = wipe_tower_toolchange_config("marlin");
+    config.set_deserialize_strict({ { "wipe_tower_type", "type2" },
+                                    { "filament_max_volumetric_speed", "2,2" },
+                                    { "filament_prime_tower_speed_factor_curve", "0.3,2,5;0.3,2,5" } });
+    const double diameter = config.option<ConfigOptionFloats>("filament_diameter")->get_at(0);
+    const std::vector<double> flows = toolchange_wipe_flows(sliced_wipe_tower(config), M_PI * diameter * diameter / 4.);
+    REQUIRE_FALSE(flows.empty());
+    for (const double flow : flows)
+        CHECK(flow <= max_volumetric_speed * 1.02);
+    CHECK(*std::max_element(flows.begin(), flows.end()) > max_volumetric_speed * 0.9);
+}
+
 TEST_CASE("The prime tower tail slowdown leaves a visit alone at full speed", "[WipeTower]")
 {
     const std::string visit = "G1 X10 Y0 E1 F3000\nG1 X20 Y0 E1\n";
