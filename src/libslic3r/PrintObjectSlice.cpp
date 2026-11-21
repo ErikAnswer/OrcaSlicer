@@ -1561,7 +1561,8 @@ void PrintObject::slice_volumes()
 	                }
 	                if (this->config().enable_circle_compensation)
 	                    layer->apply_circle_compensation(elfoot > 0.f && layer_id < lslices_elfoot_uncompensated.size() ?
-	                                                         &lslices_elfoot_uncompensated[layer_id] : nullptr);
+	                                                         &lslices_elfoot_uncompensated[layer_id] : nullptr,
+	                                                     double(elfoot) + double(std::max(0.f, -std::min(xy_hole_scaled, xy_contour_scaled))));
 	                // Merge all regions' slices to get islands, chain them by a shortest path.
 	                layer->make_slices();
 	            }

@@ -39,6 +39,8 @@ struct CircleBoundary
     Point  center;
     double diameter{ 0. };
     bool   hole{ false };
+    // Radial change applied to the circle, scaled; zero when it was left as it was.
+    double correction{ 0. };
 };
 using CircleBoundaries = std::vector<CircleBoundary>;
 
@@ -54,6 +56,11 @@ CircleBoundaries detect_circle_boundaries(const ExPolygons &outline);
 // compensation speed.
 ExPolygon compensate_circles(const ExPolygon &expolygon, const CircleCompensationParams &params, const CircleBoundaries *outline = nullptr,
                              CircleBoundaries *compensated = nullptr);
+
+// Applies to the circles of an outline the correction each one received in its layer region. A circle is
+// matched by center, side and original diameter, which may differ from the outline one by up to
+// max_offset (scaled) on each side; circles no region changed are left alone.
+ExPolygon apply_compensated_circles(const ExPolygon &expolygon, const CircleBoundaries &compensated, double max_offset);
 
 // Circles of a surface that are among the compensated ones of its layer region.
 CircleBoundaries find_compensated_circles(const ExPolygon &expolygon, const CircleBoundaries &compensated);

@@ -52,7 +52,7 @@ LayerRegion* Layer::add_region(const PrintRegion *print_region)
     return m_regions.back();
 }
 
-void Layer::apply_circle_compensation(ExPolygons *elephant_foot_uncompensated)
+void Layer::apply_circle_compensation(ExPolygons *elephant_foot_uncompensated, double outline_offset)
 {
     if (m_regions.empty())
         return;
@@ -65,9 +65,11 @@ void Layer::apply_circle_compensation(ExPolygons *elephant_foot_uncompensated)
     for (LayerRegion *layerm : m_regions)
         layerm->apply_circle_compensation(outline);
     if (elephant_foot_uncompensated != nullptr) {
-        const CircleCompensationParams params = m_regions.front()->circle_compensation_params();
+        CircleBoundaries compensated;
+        for (const LayerRegion *layerm : m_regions)
+            append(compensated, layerm->compensated_circles);
         for (ExPolygon &expolygon : *elephant_foot_uncompensated)
-            expolygon = compensate_circles(expolygon, params);
+            expolygon = apply_compensated_circles(expolygon, compensated, outline_offset);
     }
 }
 
