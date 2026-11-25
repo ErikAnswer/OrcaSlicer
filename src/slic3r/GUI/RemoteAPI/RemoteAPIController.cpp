@@ -20,6 +20,7 @@
 #include "slic3r/GUI/SettingsIndex.hpp" // the sidebar's line labels and groups for the panel's setting labels
 #include "slic3r/GUI/PresetComboBoxes.hpp" // PlaterPresetComboBox::update() for the filament slot combos
 #include "libslic3r/Model.hpp"    // M4b: ModelObject/ModelInstance for GET /objects
+#include "libslic3r/TriangleMesh.hpp" // its_make_cylinder / its_make_cube for POST /objects/{id}/modifier
 #include "slic3r/GUI/NotificationManager.hpp" // in-app change notifications
 #include "libslic3r/AppConfig.hpp"             // remote_api_notify toggle
 #include "slic3r/GUI/Tab.hpp"
@@ -3102,7 +3103,7 @@ Response Controller::handle_post_object_modifier(uint64_t id, const std::string 
     nlohmann::json in = nlohmann::json::parse(body);
     if (!in.is_object())
         return { 400, {{"error", "body_must_be_object"}} };
-    const std::string shape = in.value("shape", std::string());
+    const std::string shape = in.contains("shape") && in["shape"].is_string() ? in["shape"].get<std::string>() : std::string();
     if (shape != "cylinder" && shape != "box")
         return { 400, {{"error", "unknown_shape"}, {"detail", "cylinder|box"}} };
     auto numbers = [](const nlohmann::json &a, size_t n, std::vector<double> &out) {
@@ -3527,10 +3528,12 @@ Response Controller::handle_get_objects()
                     if (v->is_model_part()) continue;
                     nlohmann::json vc = nlohmann::json::object();
                     for (const std::string &k : v->config.keys()) vc[k] = v->config.opt_serialize(k);
-                    const char *kind = v->is_modifier()          ? "modifier"
-                                       : v->is_negative_volume() ? "negative_part"
-                                       : v->is_support_enforcer() ? "support_enforcer"
-                                                                  : "support_blocker";
+                    const char *kind = v->is_modifier()                ? "modifier"
+                                       : v->is_negative_volume()       ? "negative_part"
+                                       : v->is_support_enforcer()      ? "support_enforcer"
+                                       : v->is_support_blocker()       ? "support_blocker"
+                                       : is_precise_seam(v->type())    ? "precise_seam"
+                                                                       : "other";
                     mods.push_back({{"id", (uint64_t) v->id().id}, {"name", v->name}, {"type", kind}, {"config", vc}});
                 }
                 o["modifiers"] = mods;

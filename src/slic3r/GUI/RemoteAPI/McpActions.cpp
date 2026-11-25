@@ -222,16 +222,21 @@ std::string object_name_of(const McpRow &r)
     return !r.where.empty() ? r.where : (!r.value.empty() ? r.value : r.label);
 }
 
-// The modifier a "modifier_added" row is about: by id while the ids still hold, else by name.
+// The modifier a "modifier_added" row is about: by id while the ids still hold, else by name. -1: gone; -2: cannot be
+// tracked (after a reload more than one modifier of the object has the name).
 int modifier_index(const ModelObject &mo, const json &t, bool current, const std::string &name)
 {
-    const uint64_t id = t.value("volume_id", uint64_t(0));
+    const uint64_t id    = t.value("volume_id", uint64_t(0));
+    int            found = -1;
     for (size_t i = 0; i < mo.volumes.size(); ++i) {
         const ModelVolume *v = mo.volumes[i];
         if (!v->is_modifier()) continue;
-        if (current ? (uint64_t) v->id().id == id : v->name == name) return int(i);
+        if (current ? (uint64_t) v->id().id != id : v->name != name) continue;
+        if (current) return int(i);
+        if (found >= 0) return -2;
+        found = int(i);
     }
-    return -1;
+    return found;
 }
 
 // ---- live values ------------------------------------------------------------------------------------------------
@@ -383,8 +388,11 @@ Live live_of(const McpRow &r)
     const ModelObject *mo = p->model().objects[oi];
 
     if (type == "added") return live_value(r.value);
-    if (type == "modifier_added")
-        return live_value(modifier_index(*mo, t, current, r.value) >= 0 ? r.value : std::string(kRemovedSince));
+    if (type == "modifier_added") {
+        const int vi = modifier_index(*mo, t, current, r.value);
+        if (vi == -2) return {};
+        return live_value(vi >= 0 ? r.value : std::string(kRemovedSince));
+    }
     if (type == "object_config") {
         const std::string key = t.value("key", std::string());
         std::string       raw;
@@ -748,6 +756,7 @@ std::string undo_row(const McpRow &r, bool &cancelled, std::string &note)
     }
     if (type == "modifier_added") {
         const int vi = modifier_index(*mo, t, current, r.value);
+        if (vi == -2) return kUntracked;
         if (vi < 0) return mcp_fmt(MCP_T("{name} is gone already"), {{"name", r.value}});
         ObjectList *obj_list = wxGetApp().obj_list();
         if (!obj_list->del_subobject_from_object(oi, vi, itVolume)) return MCP_T("Can't delete it");
