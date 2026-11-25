@@ -30,6 +30,13 @@
    ]
   },
   {
+   "en": "Add a modifier",
+   "host": true,
+   "from": [
+    "RemoteAPIController.cpp"
+   ]
+  },
+  {
    "en": "Add model",
    "host": true,
    "from": [
@@ -1626,6 +1633,13 @@
   },
   {
    "en": "Remove {name} from the plate",
+   "host": true,
+   "from": [
+    "RemoteAPIController.cpp"
+   ]
+  },
+  {
+   "en": "Remove {name} from {object}",
    "host": true,
    "from": [
     "RemoteAPIController.cpp"

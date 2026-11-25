@@ -470,6 +470,87 @@ paths:
                 failed: { value: { error: "move_failed" } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "504": { $ref: "#/components/responses/UiTimeout" }
+  /objects/{id}/modifier:
+    post:
+      summary: Add a modifier to an object
+      operationId: addObjectModifier
+      description: |
+        Adds a cylinder or box modifier to the object, like Add Modifier in the
+        object list, aligned with the bed and placed from the object's bounding
+        box: its centre `center_mm` away from the box's centre in X and Y, its
+        bottom `bottom_mm` above the box's bottom. `config` holds the modifier's
+        own settings: `extruder` (1-based filament, 0 for the object's) and the
+        per-region keys (walls, infill, ...); the same checks as
+        `PUT /objects/{id}/config` apply, all or nothing. The MCP panel records it
+        with a Remove action. `GET /objects` lists the object's modifiers.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: Object id as reported by GET /objects.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [shape, size_mm]
+              properties:
+                shape: { type: string, enum: [cylinder, box] }
+                size_mm:
+                  type: array
+                  items: { type: number, exclusiveMinimum: 0 }
+                  description: "cylinder: [diameter, height]; box: [x, y, z]."
+                center_mm:
+                  type: array
+                  items: { type: number }
+                  minItems: 2
+                  maxItems: 2
+                  default: [0, 0]
+                bottom_mm: { type: number, default: 0 }
+                config: { type: object, additionalProperties: true }
+            example: { shape: cylinder, size_mm: [10, 5], config: { extruder: 2 } }
+      responses:
+        "200":
+          description: Added.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  modifier:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      name: { type: string }
+                      shape: { type: string }
+                      size_mm: { type: array, items: { type: number } }
+                      world_center_mm: { type: array, items: { type: number } }
+                      world_bottom_mm: { type: number }
+                      config: { type: object, additionalProperties: { type: string } }
+              example: { id: 832, modifier: { id: 901, name: "Generic-Cylinder", shape: cylinder, size_mm: [10, 5], world_center_mm: [150, 150], world_bottom_mm: 0, config: { extruder: "2" } } }
+        "400":
+          description: Missing or malformed `shape`, `size_mm`, `center_mm`, `bottom_mm` or `config`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "bad_size" }
+        "404":
+          description: Unknown object.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "unknown_object" }
+        "422":
+          description: A setting the modifier can't take, or out of range; nothing was added.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "invalid_config", errors: { layer_height: "not_a_modifier_setting" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "504": { $ref: "#/components/responses/UiTimeout" }
   /project:
     get:
       summary: Project name, path and dirty state

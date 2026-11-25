@@ -20,6 +20,7 @@
 #include "slic3r/GUI/SettingsIndex.hpp" // the sidebar's line labels and groups for the panel's setting labels
 #include "slic3r/GUI/PresetComboBoxes.hpp" // PlaterPresetComboBox::update() for the filament slot combos
 #include "libslic3r/Model.hpp"    // M4b: ModelObject/ModelInstance for GET /objects
+#include "libslic3r/TriangleMesh.hpp" // its_make_cylinder / its_make_cube for POST /objects/{id}/modifier
 #include "slic3r/GUI/NotificationManager.hpp" // in-app change notifications
 #include "libslic3r/AppConfig.hpp"             // remote_api_notify toggle
 #include "slic3r/GUI/Tab.hpp"
@@ -3090,6 +3091,119 @@ Response Controller::handle_put_height_range(uint64_t id, const std::string &bod
     return { 200, r };
 }
 
+// POST /api/v1/objects/{id}/modifier
+//   body {"shape":"cylinder","size_mm":[diameter,height]} | {"shape":"box","size_mm":[x,y,z]}
+//        "center_mm":[dx,dy]  where its centre goes, from the centre of the object's bounding box (default [0,0])
+//        "bottom_mm":z        how far above the object's bottom it starts (default 0)
+//        "config":{...}       the modifier's own settings: "extruder" and the per-region keys (walls, infill...)
+// Same as Add Modifier in the object list (ObjectList::load_generic_subobject), placed by these numbers instead of
+// beside the object, aligned with the bed.
+Response Controller::handle_post_object_modifier(uint64_t id, const std::string &body)
+{
+    nlohmann::json in = nlohmann::json::parse(body);
+    if (!in.is_object())
+        return { 400, {{"error", "body_must_be_object"}} };
+    const std::string shape = in.contains("shape") && in["shape"].is_string() ? in["shape"].get<std::string>() : std::string();
+    if (shape != "cylinder" && shape != "box")
+        return { 400, {{"error", "unknown_shape"}, {"detail", "cylinder|box"}} };
+    auto numbers = [](const nlohmann::json &a, size_t n, std::vector<double> &out) {
+        if (!a.is_array() || a.size() != n) return false;
+        for (const auto &v : a) {
+            if (!v.is_number()) return false;
+            out.push_back(v.get<double>());
+        }
+        return true;
+    };
+    std::vector<double> size;
+    const size_t        size_n = shape == "cylinder" ? 2 : 3;
+    if (!numbers(in.value("size_mm", nlohmann::json()), size_n, size) ||
+        std::any_of(size.begin(), size.end(), [](double v) { return !(v > 0.0 && v <= 10000.0); }))
+        return { 400, {{"error", "bad_size"}, {"detail", "cylinder: [diameter, height]; box: [x, y, z]; each above 0 mm"}} };
+    std::vector<double> center;
+    if (!in.contains("center_mm")) center = {0.0, 0.0};
+    else if (!numbers(in["center_mm"], 2, center))
+        return { 400, {{"error", "bad_center"}, {"detail", "[dx, dy] in mm from the object's centre"}} };
+    if (in.contains("bottom_mm") && !in["bottom_mm"].is_number())
+        return { 400, {{"error", "bad_bottom"}, {"detail", "mm above the object's bottom"}} };
+    const double bottom = in.value("bottom_mm", 0.0);
+    const nlohmann::json settings = in.value("config", nlohmann::json::object());
+    if (!settings.is_object())
+        return { 400, {{"error", "config_must_be_object"}} };
+
+    nlohmann::json r = run_on_ui([id, shape, size, center, bottom, settings]() -> nlohmann::json {
+        auto refuse = [&](nlohmann::json e) -> nlohmann::json {
+            mcp_refused_reply(MCP_T("Add a modifier"), e, "POST /objects/{id}/modifier");
+            return e;
+        };
+        Plater *plater = wxGetApp().plater();
+        const int idx = find_object_index(plater->model(), id);
+        if (idx < 0) return refuse({{"error", "unknown_object"}});
+        ModelObject *mo = plater->model().objects[idx];
+        if (mo->instances.empty()) return refuse({{"error", "no_instance"}});
+
+        const DynamicPrintConfig merged          = wxGetApp().preset_bundle->full_config();
+        const bool               allow_sensitive = sensitive_writes_allowed();
+        const int                filaments       = int(wxGetApp().preset_bundle->filament_presets.size());
+        DynamicPrintConfig       cfg;
+        cfg.set_key_value("extruder", new ConfigOptionInt(0));
+        nlohmann::json errors = nlohmann::json::object();
+        for (auto it = settings.begin(); it != settings.end(); ++it) {
+            const std::string &key = it.key();
+            if (key != "extruder" && !PrintRegionConfig::defaults().has(key)) { errors[key] = "not_a_modifier_setting"; continue; }
+            if (!allow_sensitive && is_sensitive_config_key(key)) { errors[key] = "blocked_by_remote_api_policy"; continue; }
+            try {
+                cfg.set_deserialize_strict(key, json_value_to_config_string(it.value()));
+                if (key == "extruder") {
+                    const int ext = cfg.opt_int("extruder");
+                    if (ext < 0 || ext > filaments) errors[key] = "out_of_range: 0 (the object's) to " + std::to_string(filaments);
+                    continue;
+                }
+                nlohmann::json rd;
+                std::string    rtext;
+                if (!config_value_in_range(key, merged.option(key), *cfg.option(key), rd, rtext))
+                    errors[key] = "out_of_range: " + rtext;
+            } catch (const std::exception &e) { errors[key] = e.what(); }
+        }
+        if (!errors.empty()) return refuse({{"error", "invalid_config"}, {"errors", errors}});
+
+        const BoundingBoxf3 bb = mo->instance_bounding_box(0);
+        if (!bb.defined) return refuse({{"error", "no_instance"}});
+        const double height = shape == "cylinder" ? size[1] : size[2];
+        TriangleMesh mesh   = shape == "cylinder" ? TriangleMesh(its_make_cylinder(0.5 * size[0], size[1]))
+                                                  : TriangleMesh(its_make_cube(size[0], size[1], size[2]));
+
+        mcp_before_change();
+        Plater::TakeSnapshot snapshot(plater, "Add primitive");
+        ModelVolume *volume = mo->add_volume(std::move(mesh), ModelVolumeType::PARAMETER_MODIFIER);
+        const Geometry::Transformation &inst      = mo->instances.front()->get_transformation();
+        const Transform3d               to_object = inst.get_matrix_no_offset().inverse();
+        volume->set_transformation(Geometry::Transformation(to_object));
+        const Vec3d centre(bb.center().x() + center[0], bb.center().y() + center[1], bb.min.z() + bottom + 0.5 * height);
+        volume->set_offset(to_object * (centre - inst.get_offset()));
+        volume->name = into_u8(_L("Generic") + "-" + (shape == "cylinder" ? _L("Cylinder") : _L("Cube")));
+        volume->config.assign_config(std::move(cfg));
+        volume->source.is_from_builtin_objects = true;
+        const uint64_t volume_id = volume->id().id;
+        wxGetApp().obj_list()->reorder_volumes_and_get_selection(idx);
+        api_notify("Added a modifier to '" + mo->name + "'");
+
+        McpRow row = mcp_row("model", MCP_T("Added"), volume->name, std::string(), mo->name);
+        row.target = {{"type", "modifier_added"}, {"object_id", id}, {"volume_id", volume_id}};
+        mcp_undo(row, MCP_T("Remove"), mcp_fmt(MCP_T("Remove {name} from {object}"), {{"name", volume->name}, {"object", mo->name}}));
+        mcp_record(std::move(row));
+
+        nlohmann::json vcfg = nlohmann::json::object();
+        for (const std::string &k : volume->config.keys()) vcfg[k] = volume->config.opt_serialize(k);
+        return {{"id", id},
+                {"modifier", {{"id", volume_id}, {"name", volume->name}, {"shape", shape}, {"size_mm", size},
+                              {"world_center_mm", {centre.x(), centre.y()}}, {"world_bottom_mm", centre.z() - 0.5 * height},
+                              {"config", vcfg}}}};
+    }, /*timeout_s=*/120);
+    if (r.contains("error"))
+        return { r["error"] == "unknown_object" ? 404 : 422, r };
+    return { 200, r };
+}
+
 // Shared: parse {"type","name"} and resolve the collection. Returns nullptr collection on bad type.
 static PresetCollection *api_preset_collection(const std::string &type_s)
 {
@@ -3407,6 +3521,22 @@ Response Controller::handle_get_objects()
                     rngs.push_back({{"min_z", kv.first.first}, {"max_z", kv.first.second},
                                     {"layer_height", kv.second.has("layer_height") ? kv.second.opt_float("layer_height") : 0.0}});
                 o["height_ranges"] = rngs;
+            }
+            {
+                nlohmann::json mods = nlohmann::json::array();
+                for (const ModelVolume *v : mo->volumes) {
+                    if (v->is_model_part()) continue;
+                    nlohmann::json vc = nlohmann::json::object();
+                    for (const std::string &k : v->config.keys()) vc[k] = v->config.opt_serialize(k);
+                    const char *kind = v->is_modifier()                ? "modifier"
+                                       : v->is_negative_volume()       ? "negative_part"
+                                       : v->is_support_enforcer()      ? "support_enforcer"
+                                       : v->is_support_blocker()       ? "support_blocker"
+                                       : is_precise_seam(v->type())    ? "precise_seam"
+                                                                       : "other";
+                    mods.push_back({{"id", (uint64_t) v->id().id}, {"name", v->name}, {"type", kind}, {"config", vc}});
+                }
+                o["modifiers"] = mods;
             }
             objects.push_back(std::move(o));
         }
@@ -6945,6 +7075,10 @@ Response Controller::dispatch_route(const Request &req)
                 }
                 if (req.method == "PUT" && action == "height_range") {
                     try { return handle_put_height_range(oid, req.body); }
+                    catch (const nlohmann::json::parse_error &) { return { 400, {{"error", "invalid_json"}} }; }
+                }
+                if (req.method == "POST" && action == "modifier") {
+                    try { return handle_post_object_modifier(oid, req.body); }
                     catch (const nlohmann::json::parse_error &) { return { 400, {{"error", "invalid_json"}} }; }
                 }
                 return { 404, {{"error", "not_found"}} };

@@ -63,6 +63,7 @@ Base URL: `http://<host>:13130/api/v1`
 | PUT | `/objects/{id}/config` | Per-object setting overrides |
 | PUT | `/objects/{id}/layer_height` | Adaptive layer height (`{"mode":"adaptive","quality"}`) or reset |
 | PUT | `/objects/{id}/height_range` | Settings for a height range of an object (`min_z`, `max_z`, `layer_height`), or `{"clear":true}` |
+| POST | `/objects/{id}/modifier` | Add a cylinder or box modifier to an object, with its own settings (`shape`, `size_mm`, `center_mm`, `bottom_mm`, `config`); `GET /objects` lists them under `modifiers` |
 | POST | `/arrange` | Arrange all (`202`; follow it with `GET /jobs/status`) |
 | POST | `/orient` | Auto-orient (`202`; follow it with `GET /jobs/status`) |
 | GET | `/jobs/status` | `{"idle"}`: whether an arrange or orient job is still running |
