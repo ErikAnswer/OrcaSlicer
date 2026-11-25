@@ -214,12 +214,24 @@ std::string object_name_of(const McpRow &r)
 {
     const std::string t = r.target.value("type", std::string());
     if (t == "added" || t == "removed" || t == "layer_profile") return r.value;
-    if (t == "transform" || t == "height_range" || t == "height_ranges_cleared") return r.where;
+    if (t == "transform" || t == "height_range" || t == "height_ranges_cleared" || t == "modifier_added") return r.where;
     if (t == "object_config") return before_sep(r.where, " only");
     if (t == "duplicate") return before_sep(r.value, ", now ");
     if (t == "instance_plate") return before_sep(r.value, std::string(" ") + kArrow);
     if (t == "instances") return r.where.empty() ? std::string(MCP_T("An object")) : r.where;
     return !r.where.empty() ? r.where : (!r.value.empty() ? r.value : r.label);
+}
+
+// The modifier a "modifier_added" row is about: by id while the ids still hold, else by name.
+int modifier_index(const ModelObject &mo, const json &t, bool current, const std::string &name)
+{
+    const uint64_t id = t.value("volume_id", uint64_t(0));
+    for (size_t i = 0; i < mo.volumes.size(); ++i) {
+        const ModelVolume *v = mo.volumes[i];
+        if (!v->is_modifier()) continue;
+        if (current ? (uint64_t) v->id().id == id : v->name == name) return int(i);
+    }
+    return -1;
 }
 
 // ---- live values ------------------------------------------------------------------------------------------------
@@ -371,6 +383,8 @@ Live live_of(const McpRow &r)
     const ModelObject *mo = p->model().objects[oi];
 
     if (type == "added") return live_value(r.value);
+    if (type == "modifier_added")
+        return live_value(modifier_index(*mo, t, current, r.value) >= 0 ? r.value : std::string(kRemovedSince));
     if (type == "object_config") {
         const std::string key = t.value("key", std::string());
         std::string       raw;
@@ -732,6 +746,15 @@ std::string undo_row(const McpRow &r, bool &cancelled, std::string &note)
         p->remove(size_t(oi));
         return {};
     }
+    if (type == "modifier_added") {
+        const int vi = modifier_index(*mo, t, current, r.value);
+        if (vi < 0) return mcp_fmt(MCP_T("{name} is gone already"), {{"name", r.value}});
+        ObjectList *obj_list = wxGetApp().obj_list();
+        if (!obj_list->del_subobject_from_object(oi, vi, itVolume)) return MCP_T("Can't delete it");
+        obj_list->add_volumes_to_object_in_list(size_t(oi));
+        obj_list->update_info_items(size_t(oi));
+        return {};
+    }
     if (type == "object_config") {
         const std::string key = t.value("key", std::string());
         DynamicPrintConfig cfg = mo->config.get();
@@ -840,6 +863,7 @@ std::string journal_line(const McpRow &r)
     else if (type == "plate_added" || type == "preset_saved") what = r.value;
     else if (type == "height_range") what = r.label + " of " + r.where;
     else if (type == "layer_profile") what = "the layer height profile of " + r.value;
+    else if (type == "modifier_added") what = r.value + " of " + r.where;
     else if (type == "instances") what = r.where.empty() ? r.value : r.where;
     else what = object_name_of(r);
     return verb + " in the panel: " + what;

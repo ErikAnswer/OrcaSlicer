@@ -138,6 +138,7 @@ private:
     Response handle_delete_preset(const std::string &body);      // DELETE /preset
     Response handle_put_layer_height(uint64_t id, const std::string &body);  // M4c: PUT /objects/{id}/layer_height
     Response handle_put_height_range(uint64_t id, const std::string &body);  // M4c: PUT /objects/{id}/height_range
+    Response handle_post_object_modifier(uint64_t id, const std::string &body); // POST /objects/{id}/modifier
     Response handle_get_gcode();                            // M4a: GET /gcode (raw body)
     Response handle_plate_render(const std::string &target); // GET /plate/render (PNG: editor|preview)
     Response handle_get_objects();                          // M4b: GET /objects
