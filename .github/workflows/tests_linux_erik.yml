@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       filter:
-        description: Catch2 test spec passed to test_fff_print (empty runs every test)
+        description: Catch2 test spec passed to fff_print_tests (empty runs every test)
         type: string
         default: "[AvoidCrossingPerimeters]"
   push:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   fff_print:
-    name: Build and run test_fff_print
+    name: Build and run fff_print_tests
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     env:
@@ -62,7 +62,7 @@ jobs:
           path: ${{ env.DEPS_DIR }}
           key: ${{ steps.key.outputs.key }}
 
-      - name: Build test_fff_print
+      - name: Build fff_print_tests
         run: |
           lld=$(command -v ld.lld)
           cmake -S . -B build -G "Ninja Multi-Config" \
@@ -70,17 +70,17 @@ jobs:
             -DCMAKE_LINKER="$lld" -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
             -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld \
             -DSLIC3R_PCH=ON -DORCA_TOOLS=ON -DBUILD_TESTS=ON
-          cmake --build build --config Release --target test_fff_print
+          cmake --build build --config Release --target fff_print_tests
 
-      - name: Run test_fff_print
+      - name: Run fff_print_tests
         env:
           FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.filter || '[AvoidCrossingPerimeters]' }}
         run: |
-          binary=$(find build/tests/fff_print -type f -name test_fff_print -perm -u+x | head -n 1)
+          binary=$(find build/tests/fff_print -type f -name fff_print_tests -perm -u+x | head -n 1)
           test -n "$binary"
           cd "$(dirname "$binary")"
           if [[ -n "$FILTER" ]]; then
-            ./test_fff_print "$FILTER" --durations yes
+            ./fff_print_tests "$FILTER" --durations yes
           else
-            ./test_fff_print --durations yes
+            ./fff_print_tests --durations yes
           fi
