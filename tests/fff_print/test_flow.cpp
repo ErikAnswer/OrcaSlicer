@@ -16,7 +16,9 @@
 #include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/Flow.hpp"
 #include "libslic3r/Layer.hpp"
+#include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
+#include "libslic3r/PrintBase.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/libslic3r.h"
 
@@ -104,6 +106,18 @@ SCENARIO("Flow math for bridges", "[Flow]") {
 
 namespace {
 
+double first_layer_fill_mm3_per_mm(const Print &print)
+{
+    double volume = 0.;
+    double length = 0.;
+    for (const ExtrusionEntity *entity : print.objects().front()->get_layer(0)->regions().front()->fills.flatten().entities) {
+        volume += entity->total_volume();
+        length += unscale<double>(entity->length());
+    }
+    REQUIRE(length > 0.);
+    return volume / length;
+}
+
 struct FirstLayerWidths
 {
     double first_layer_wall;
@@ -135,13 +149,6 @@ FirstLayerWidths first_layer_widths(const char *first_layer_infill_width)
 
     const Layer       &first  = *print.objects().front()->get_layer(0);
     const LayerRegion &region = *first.regions().front();
-    double volume = 0.;
-    double length = 0.;
-    for (const ExtrusionEntity *entity : region.fills.flatten().entities) {
-        volume += entity->total_volume();
-        length += unscale<double>(entity->length());
-    }
-    REQUIRE(length > 0.);
 
     return {
         region.flow(frPerimeter).width(),
@@ -150,7 +157,7 @@ FirstLayerWidths first_layer_widths(const char *first_layer_infill_width)
         region.flow(frSolidInfill).width(),
         region.flow(frTopSolidInfill).width(),
         print.objects().front()->get_layer(1)->regions().front()->flow(frSolidInfill).width(),
-        volume / length,
+        first_layer_fill_mm3_per_mm(print),
         Slic3r::Test::gcode(print),
     };
 }
@@ -205,4 +212,59 @@ TEST_CASE("First layer infill line width of zero resolves to the first layer lin
 
     config.set_deserialize_strict({ { "initial_layer_infill_line_width", "0.8" } });
     CHECK_THAT(Flow::extrusion_width("initial_layer_infill_line_width", config), Catch::Matchers::WithinAbs(0.8, 1e-4));
+}
+
+TEST_CASE("Changing the first layer infill line width on a processed print regenerates the first layer infill", "[Flow]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "gcode_comments",                   true },
+        { "nozzle_diameter",                  "0.4" },
+        { "layer_height",                     0.2 },
+        { "initial_layer_print_height",       0.2 },
+        { "line_width",                       "0.45" },
+        { "sparse_infill_line_width",         "0" },
+        { "internal_solid_infill_line_width", "0" },
+        { "top_surface_line_width",           "0" },
+        { "initial_layer_line_width",         "0.4" },
+        { "initial_layer_infill_line_width",  "0" },
+    });
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({ Slic3r::Test::cube(20) }, print, model, config);
+    print.process();
+
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.is_step_done(posInfill));
+    CHECK_THAT(object.get_layer(0)->regions().front()->flow(frSolidInfill).width(), Catch::Matchers::WithinAbs(0.4, 1e-4));
+    const double fill_mm3_per_mm_before = first_layer_fill_mm3_per_mm(print);
+
+    config.set_deserialize_strict({ { "initial_layer_infill_line_width", "0.8" } });
+    CHECK(print.apply(model, config) != PrintBase::APPLY_STATUS_UNCHANGED);
+    CHECK_FALSE(print.objects().front()->is_step_done(posPerimeters));
+    CHECK_FALSE(print.objects().front()->is_step_done(posInfill));
+
+    print.process();
+    const PrintObject &reprocessed = *print.objects().front();
+    REQUIRE(reprocessed.is_step_done(posInfill));
+    CHECK_THAT(reprocessed.get_layer(0)->regions().front()->flow(frSolidInfill).width(), Catch::Matchers::WithinAbs(0.8, 1e-4));
+    CHECK_THAT(reprocessed.get_layer(0)->regions().front()->flow(frPerimeter).width(), Catch::Matchers::WithinAbs(0.4, 1e-4));
+    CHECK(first_layer_fill_mm3_per_mm(print) > 1.5 * fill_mm3_per_mm_before);
+}
+
+TEST_CASE("First layer infill line width above the maximum line width is rejected", "[Flow]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "nozzle_diameter",                 "0.4" },
+        { "initial_layer_infill_line_width", "0.8" },
+    });
+    CHECK(config.validate().count("initial_layer_infill_line_width") == 0);
+
+    const double max_width = MAX_LINE_WIDTH_MULTIPLIER * 0.4;
+    config.set_deserialize_strict({ { "initial_layer_infill_line_width", std::to_string(max_width + 0.1) } });
+    CHECK(config.validate().count("initial_layer_infill_line_width") == 1);
+
+    config.set_deserialize_strict({ { "initial_layer_infill_line_width", "600%" } });
+    CHECK(config.validate().count("initial_layer_infill_line_width") == 1);
 }
