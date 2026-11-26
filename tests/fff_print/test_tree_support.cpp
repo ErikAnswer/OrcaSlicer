@@ -140,6 +140,62 @@ double support_to_column_gap(const char *type, const char *style, bool top_z_ove
     return unscale<double>(gap);
 }
 
+void collect_points_with_role(const ExtrusionEntityCollection &collection, ExtrusionRole role, Points &points)
+{
+    for (const ExtrusionEntity *entity : collection.entities) {
+        if (entity->is_collection())
+            collect_points_with_role(*static_cast<const ExtrusionEntityCollection *>(entity), role, points);
+        else if (entity->role() == role)
+            entity->collect_points(points);
+    }
+}
+
+struct ClassicTreeGaps
+{
+    double interface;
+    double branches;
+};
+
+// Smallest distance from the interface and from the branches of a classic tree to the column of
+// two_tier_mesh(). The column is a prism, so its outline at mid height stands for every layer up to
+// the upper plate, including the interface layers that sit just under it.
+ClassicTreeGaps classic_tree_to_column_gaps(const char *style, double xy_distance, double top_z_distance,
+                                            bool top_z_overrides_xy)
+{
+    Slic3r::Print print;
+    slice_with_tree_support(two_tier_mesh(), print, style, 30, 0, 0, {
+        { "support_object_xy_distance",      xy_distance },
+        { "support_top_z_distance",          top_z_distance },
+        { "support_interface_top_layers",    3 },
+        { "support_interface_bottom_layers", 0 },
+        { "top_z_overrides_xy_distance",     top_z_overrides_xy ? 1 : 0 },
+    });
+    const PrintObject *object = print.objects().front();
+    const Layer *mid_column = *std::min_element(object->layers().begin(), object->layers().end(),
+        [](const Layer *a, const Layer *b) { return std::abs(a->print_z - 10.) < std::abs(b->print_z - 10.); });
+    const Lines column = to_lines(mid_column->lslices);
+
+    auto gap_to_column = [&column](const Points &points) {
+        double gap = std::numeric_limits<double>::max();
+        for (const Line &edge : column)
+            for (const Point &point : points)
+                gap = std::min(gap, edge.distance_to(point));
+        return unscale<double>(gap);
+    };
+
+    Points interface_points, branch_points;
+    for (const SupportLayer *support_layer : object->support_layers()) {
+        if (support_layer->print_z < 5. || support_layer->print_z >= 16.)
+            continue;
+        collect_points_with_role(support_layer->support_fills, erSupportMaterialInterface, interface_points);
+        if (support_layer->print_z <= 13.)
+            collect_points_with_role(support_layer->support_fills, erSupportMaterial, branch_points);
+    }
+    REQUIRE_FALSE(interface_points.empty());
+    REQUIRE_FALSE(branch_points.empty());
+    return { gap_to_column(interface_points), gap_to_column(branch_points) };
+}
+
 } // namespace
 
 TEST_CASE("Tree support is generated for an overhang and not for a plain cube", "[TreeSupport]")
@@ -252,4 +308,29 @@ TEST_CASE("Top Z distance overriding the XY distance lets supports closer to the
     CAPTURE(kept, overridden);
     REQUIRE(kept < 100.); // without support near the column the comparison below is meaningless
     REQUIRE(overridden < kept - 0.4);
+}
+
+// Classic trees build their interface from the tree nodes instead of the overhang polygons, so the
+// override reaches it through its own collision. Only the interface may get closer: the branches
+// below keep the full XY distance.
+TEST_CASE("Top Z distance overriding the XY distance lets the classic tree interface closer to the walls", "[TreeSupport]")
+{
+    const char *style = "tree_slim";
+    SECTION("slim tree support") {}
+    SECTION("strong tree support") { style = "tree_strong"; }
+
+    const double xy_distance    = 1.0;
+    const double top_z_distance = 0.2;
+    const ClassicTreeGaps kept       = classic_tree_to_column_gaps(style, xy_distance, top_z_distance, false);
+    const ClassicTreeGaps overridden = classic_tree_to_column_gaps(style, xy_distance, top_z_distance, true);
+    CAPTURE(style, kept.interface, kept.branches, overridden.interface, overridden.branches);
+
+    REQUIRE(kept.interface < 100.); // without an interface near the column the comparison below is meaningless
+    REQUIRE(overridden.interface < kept.interface - 0.4);
+
+    // Toolpaths are centre lines inside the support area, which already stays xy_distance away. The
+    // margin only absorbs the chords that approximate the rounded corners of the offset outline.
+    const double chord_margin = 0.05;
+    REQUIRE(kept.branches >= xy_distance - chord_margin);
+    REQUIRE(overridden.branches >= xy_distance - chord_margin);
 }
