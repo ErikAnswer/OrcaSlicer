@@ -18,6 +18,7 @@
 #include "libslic3r/TriangleMesh.hpp"
 
 #include "test_helpers.hpp"
+#include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/ExtrusionEntityCollection.hpp"
 #include "libslic3r/Print.hpp"
 
@@ -140,32 +141,35 @@ double support_to_column_gap(const char *type, const char *style, bool top_z_ove
     return unscale<double>(gap);
 }
 
-void collect_points_with_role(const ExtrusionEntityCollection &collection, ExtrusionRole role, Points &points)
+Points points_with_role(const ExtrusionEntityCollection &fills, ExtrusionRole role)
 {
-    for (const ExtrusionEntity *entity : collection.entities) {
-        if (entity->is_collection())
-            collect_points_with_role(*static_cast<const ExtrusionEntityCollection *>(entity), role, points);
-        else if (entity->role() == role)
-            entity->collect_points(points);
-    }
+    Points points;
+    for_each_extrusion_path(fills, [role, &points](const ExtrusionPath &path) {
+        if (path.role() == role)
+            path.collect_points(points);
+    });
+    return points;
 }
 
 struct ClassicTreeGaps
 {
-    double interface;
+    double first_interface; // the lowest interface layer, drawn from roof_1st_layer
+    double upper_interface; // the interface layers above it, drawn from roof_areas
     double branches;
 };
 
-// Smallest distance from the interface and from the branches of a classic tree to the column of
-// two_tier_mesh(). The column is a prism, so its outline at mid height stands for every layer up to
-// the upper plate, including the interface layers that sit just under it.
+// Smallest distances from a classic tree to the column of two_tier_mesh(). The column is a prism, so
+// its outline at mid height stands for every layer up to the upper plate, including the interface
+// layers that sit just under it. The plate is the only overhang and no floor interface is printed,
+// so every interface toolpath belongs to the roof under the plate.
 ClassicTreeGaps classic_tree_to_column_gaps(const char *style, double xy_distance, double top_z_distance,
-                                            bool top_z_overrides_xy)
+                                            double line_width, bool top_z_overrides_xy)
 {
     Slic3r::Print print;
     slice_with_tree_support(two_tier_mesh(), print, style, 30, 0, 0, {
         { "support_object_xy_distance",      xy_distance },
         { "support_top_z_distance",          top_z_distance },
+        { "support_line_width",              line_width },
         { "support_interface_top_layers",    3 },
         { "support_interface_bottom_layers", 0 },
         { "top_z_overrides_xy_distance",     top_z_overrides_xy ? 1 : 0 },
@@ -183,17 +187,22 @@ ClassicTreeGaps classic_tree_to_column_gaps(const char *style, double xy_distanc
         return unscale<double>(gap);
     };
 
-    Points interface_points, branch_points;
+    Points first_interface_points, upper_interface_points, branch_points;
     for (const SupportLayer *support_layer : object->support_layers()) {
         if (support_layer->print_z < 5. || support_layer->print_z >= 16.)
             continue;
-        collect_points_with_role(support_layer->support_fills, erSupportMaterialInterface, interface_points);
+        Points interface_points = points_with_role(support_layer->support_fills, erSupportMaterialInterface);
+        if (first_interface_points.empty())
+            first_interface_points = std::move(interface_points);
+        else
+            append(upper_interface_points, std::move(interface_points));
         if (support_layer->print_z <= 13.)
-            collect_points_with_role(support_layer->support_fills, erSupportMaterial, branch_points);
+            append(branch_points, points_with_role(support_layer->support_fills, erSupportMaterial));
     }
-    REQUIRE_FALSE(interface_points.empty());
+    REQUIRE_FALSE(first_interface_points.empty());
+    REQUIRE_FALSE(upper_interface_points.empty());
     REQUIRE_FALSE(branch_points.empty());
-    return { gap_to_column(interface_points), gap_to_column(branch_points) };
+    return { gap_to_column(first_interface_points), gap_to_column(upper_interface_points), gap_to_column(branch_points) };
 }
 
 } // namespace
@@ -321,16 +330,23 @@ TEST_CASE("Top Z distance overriding the XY distance lets the classic tree inter
 
     const double xy_distance    = 1.0;
     const double top_z_distance = 0.2;
-    const ClassicTreeGaps kept       = classic_tree_to_column_gaps(style, xy_distance, top_z_distance, false);
-    const ClassicTreeGaps overridden = classic_tree_to_column_gaps(style, xy_distance, top_z_distance, true);
-    CAPTURE(style, kept.interface, kept.branches, overridden.interface, overridden.branches);
+    const double line_width     = 0.4;
+    const ClassicTreeGaps kept       = classic_tree_to_column_gaps(style, xy_distance, top_z_distance, line_width, false);
+    const ClassicTreeGaps overridden = classic_tree_to_column_gaps(style, xy_distance, top_z_distance, line_width, true);
+    CAPTURE(style, kept.first_interface, kept.upper_interface, kept.branches,
+            overridden.first_interface, overridden.upper_interface, overridden.branches);
 
-    REQUIRE(kept.interface < 100.); // without an interface near the column the comparison below is meaningless
-    REQUIRE(overridden.interface < kept.interface - 0.4);
+    REQUIRE(overridden.upper_interface < kept.upper_interface - 0.4);
+    REQUIRE(overridden.first_interface < kept.first_interface - 0.4);
+
+    // roof_1st_layer stays half a line further out than the layers above it, and its toolpaths start
+    // with a perimeter whose centre line is another half line inside. Without that margin the
+    // perimeter would sit one line width closer than this bound.
+    const double chord_margin = 0.05;
+    REQUIRE(overridden.first_interface >= top_z_distance + line_width / 2 + line_width / 2 - 2 * chord_margin);
 
     // Toolpaths are centre lines inside the support area, which already stays xy_distance away. The
     // margin only absorbs the chords that approximate the rounded corners of the offset outline.
-    const double chord_margin = 0.05;
     REQUIRE(kept.branches >= xy_distance - chord_margin);
     REQUIRE(overridden.branches >= xy_distance - chord_margin);
 }
