@@ -115,6 +115,7 @@ std::string PresetHints::maximum_volumetric_flow_description(const PresetBundle 
     const auto &extrusion_width                     = *print_config.option<ConfigOptionFloatOrPercent>("line_width");
     const auto &outer_wall_line_width  = *print_config.option<ConfigOptionFloatOrPercent>("outer_wall_line_width");
     const auto &initial_layer_line_width         = *print_config.option<ConfigOptionFloatOrPercent>("initial_layer_line_width");
+    const auto &initial_layer_infill_line_width  = *print_config.option<ConfigOptionFloatOrPercent>("initial_layer_infill_line_width");
     const auto &sparse_infill_line_width              = *print_config.option<ConfigOptionFloatOrPercent>("sparse_infill_line_width");
     const auto &inner_wall_line_width           = *print_config.option<ConfigOptionFloatOrPercent>("inner_wall_line_width");
     const auto &internal_solid_infill_line_width        = *print_config.option<ConfigOptionFloatOrPercent>("internal_solid_infill_line_width");
@@ -142,12 +143,10 @@ std::string PresetHints::maximum_volumetric_flow_description(const PresetBundle 
     // double filament_flow_ratio             = filament_config.opt_float("filament_flow_ratio", 0);
     // The following value will be annotated by this hint, so it does not take part in the calculation.
 //    double filament_max_volumetric_speed    = filament_config.opt_float("filament_max_volumetric_speed", 0);
-    for (size_t idx_type = (initial_layer_line_width.value == 0) ? 1 : 0; idx_type < 3; ++ idx_type) {
+    for (size_t idx_type = (initial_layer_line_width.value == 0 && initial_layer_infill_line_width.value == 0) ? 1 : 0; idx_type < 3; ++ idx_type) {
         // First test the maximum volumetric extrusion speed for non-bridging extrusions.
         bool first_layer = idx_type == 0;
         bool bridging    = idx_type == 2;
-		const ConfigOptionFloatOrPercent *first_layer_extrusion_width_ptr = (first_layer && initial_layer_line_width.value > 0) ?
-			&initial_layer_line_width : nullptr;
         const float                       lh  = float(first_layer ? initial_layer_print_height : layer_height);
         double                            max_flow = 0.;
         std::string                       max_flow_extrusion_type;
@@ -158,8 +157,12 @@ std::string PresetHints::maximum_volumetric_flow_description(const PresetBundle 
             return (speed_normal > 0.) ? speed_normal : speed_max;
         };
         auto test_flow =
-            [first_layer_extrusion_width_ptr, extrusion_width, nozzle_diameter, lh, bridging, bridge_speed, bridge_flow, limit_by_first_layer_speed, max_print_speed, &max_flow, &max_flow_extrusion_type]
+            [first_layer, &initial_layer_line_width, &initial_layer_infill_line_width, extrusion_width, nozzle_diameter, lh, bridging, bridge_speed, bridge_flow, limit_by_first_layer_speed, max_print_speed, &max_flow, &max_flow_extrusion_type]
             (FlowRole flow_role, const ConfigOptionFloatOrPercent &this_extrusion_width, double speed, const char *err_msg) {
+            const bool infill_role = flow_role == frInfill || flow_role == frSolidInfill || flow_role == frTopSolidInfill;
+            const ConfigOptionFloatOrPercent *first_layer_extrusion_width_ptr = ! first_layer ? nullptr :
+                (infill_role && initial_layer_infill_line_width.value > 0) ? &initial_layer_infill_line_width :
+                (initial_layer_line_width.value > 0) ? &initial_layer_line_width : nullptr;
             Flow flow = bridging ?
                 Flow::new_from_config_width(flow_role, first_positive(first_layer_extrusion_width_ptr, this_extrusion_width, extrusion_width), nozzle_diameter, lh) :
                 Flow::bridging_flow(nozzle_diameter * bridge_flow, nozzle_diameter);

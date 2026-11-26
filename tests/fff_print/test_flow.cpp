@@ -206,3 +206,55 @@ TEST_CASE("First layer infill line width of zero resolves to the first layer lin
     config.set_deserialize_strict({ { "initial_layer_infill_line_width", "0.8" } });
     CHECK_THAT(Flow::extrusion_width("initial_layer_infill_line_width", config), Catch::Matchers::WithinAbs(0.8, 1e-4));
 }
+
+TEST_CASE("Changing the first layer infill line width on a processed print regenerates the first layer infill", "[Flow]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "nozzle_diameter",                  "0.4" },
+        { "layer_height",                     0.2 },
+        { "initial_layer_print_height",       0.2 },
+        { "line_width",                       "0.45" },
+        { "sparse_infill_line_width",         "0" },
+        { "internal_solid_infill_line_width", "0" },
+        { "top_surface_line_width",           "0" },
+        { "initial_layer_line_width",         "0.4" },
+        { "initial_layer_infill_line_width",  "0" },
+    });
+    Print print;
+    Model model;
+    Slic3r::Test::init_print({ Slic3r::Test::cube(20) }, print, model, config);
+    print.process();
+
+    const PrintObject &object = *print.objects().front();
+    REQUIRE(object.is_step_done(posInfill));
+    CHECK_THAT(object.get_layer(0)->regions().front()->flow(frSolidInfill).width(), Catch::Matchers::WithinAbs(0.4, 1e-4));
+
+    config.set_deserialize_strict({ { "initial_layer_infill_line_width", "0.8" } });
+    CHECK(print.apply(model, config) != PrintBase::APPLY_STATUS_UNCHANGED);
+    CHECK_FALSE(print.objects().front()->is_step_done(posPerimeters));
+    CHECK_FALSE(print.objects().front()->is_step_done(posInfill));
+
+    print.process();
+    const PrintObject &reprocessed = *print.objects().front();
+    REQUIRE(reprocessed.is_step_done(posInfill));
+    CHECK_THAT(reprocessed.get_layer(0)->regions().front()->flow(frSolidInfill).width(), Catch::Matchers::WithinAbs(0.8, 1e-4));
+    CHECK_THAT(reprocessed.get_layer(0)->regions().front()->flow(frPerimeter).width(), Catch::Matchers::WithinAbs(0.4, 1e-4));
+}
+
+TEST_CASE("First layer infill line width above the maximum line width is rejected", "[Flow]")
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "nozzle_diameter",                 "0.4" },
+        { "initial_layer_infill_line_width", "0.8" },
+    });
+    CHECK(config.validate().count("initial_layer_infill_line_width") == 0);
+
+    const double max_width = MAX_LINE_WIDTH_MULTIPLIER * 0.4;
+    config.set_deserialize_strict({ { "initial_layer_infill_line_width", std::to_string(max_width + 0.1) } });
+    CHECK(config.validate().count("initial_layer_infill_line_width") == 1);
+
+    config.set_deserialize_strict({ { "initial_layer_infill_line_width", "600%" } });
+    CHECK(config.validate().count("initial_layer_infill_line_width") == 1);
+}
