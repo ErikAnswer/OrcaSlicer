@@ -6,6 +6,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/GCodeReader.hpp"
 #include "libslic3r/Layer.hpp"
 
@@ -575,13 +576,119 @@ TEST_CASE("Including supports does nothing while avoiding crossing walls is disa
     REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-6));
 }
 
+struct TravelsOverMaterial {
+    MoveLengths lengths;
+    double      travel_over_air      = 0;
+    double      extrusion_on_layers  = 0;
+    double      extrusion_over_area  = 0;
+    size_t      support_layers_with_fills   = 0;
+    size_t      support_layers_with_islands = 0;
+};
+
+// Footprint of what is printed at print_z: the object slices plus the area its support extrusions cover,
+// in G-code coordinates and grown by half a millimetre so that a travel hugging an edge counts as over material.
+static Polygons printed_area(const PrintObject &object, double print_z)
+{
+    Polygons area;
+    if (const Layer *layer = object.get_layer_at_printz(print_z, 0.01))
+        append(area, to_polygons(layer->lslices));
+    if (const SupportLayer *support_layer = object.get_support_layer_at_printz(print_z, 0.01))
+        append(area, support_layer->support_fills.polygons_covered_by_spacing());
+    for (Polygon &polygon : area)
+        polygon.translate(object.instances().front().shift);
+    return offset(union_(area), scaled<float>(0.5));
+}
+
+static TravelsOverMaterial travels_over_material(const PrintObject &object, const std::string &gcode)
+{
+    std::map<double, std::pair<Polylines, Polylines>> moves_by_z;
+    GCodeReader parser;
+    parser.parse_buffer(gcode, [&moves_by_z](GCodeReader &self, const GCodeReader::GCodeLine &line) {
+        if (!line.cmd_is("G0") && !line.cmd_is("G1"))
+            return;
+        if (std::hypot(line.dist_X(self), line.dist_Y(self)) < 1e-3)
+            return;
+        Polyline segment(Point::new_scale(self.x(), self.y()), Point::new_scale(line.new_X(self), line.new_Y(self)));
+        auto &moves = moves_by_z[line.new_Z(self)];
+        (line.extruding(self) ? moves.second : moves.first).push_back(std::move(segment));
+    });
+
+    TravelsOverMaterial result;
+    result.lengths = move_lengths(gcode);
+    for (const auto &[z, moves] : moves_by_z) {
+        const Polygons area = printed_area(object, z);
+        if (area.empty())
+            continue;
+        result.travel_over_air     += unscale<double>(total_length(diff_pl(moves.first, area)));
+        result.extrusion_on_layers += unscale<double>(total_length(moves.second));
+        result.extrusion_over_area += unscale<double>(total_length(intersection_pl(moves.second, area)));
+    }
+    return result;
+}
+
+static TravelsOverMaterial supported_capital_travels(std::initializer_list<Slic3r::ConfigBase::SetDeserializeItem> support_items, bool include_supports)
+{
+    DynamicPrintConfig config = DynamicPrintConfig::full_print_config();
+    config.set_deserialize_strict({
+        { "enable_support",                       "1" },
+        { "layer_height",                         "0.2" },
+        { "support_on_build_plate_only",          "0" },
+        { "z_hop",                                "0" },
+        { "reduce_crossing_wall",                 "1" },
+        { "avoid_crossing_wall_includes_support", include_supports ? "1" : "0" },
+    });
+    config.set_deserialize_strict(support_items);
+    Print print;
+    Model model;
+    init_print({ support_capital() }, print, model, config);
+    const std::string   g        = gcode(print);
+    const PrintObject  &object   = *print.objects().front();
+    TravelsOverMaterial travels  = travels_over_material(object, g);
+    for (const SupportLayer *support_layer : object.support_layers())
+        if (!support_layer->support_fills.empty()) {
+            ++travels.support_layers_with_fills;
+            if (!support_layer->support_islands.empty())
+                ++travels.support_layers_with_islands;
+        }
+    return travels;
+}
+
+static void require_same_extrusions_and_mapped_coordinates(const TravelsOverMaterial &without_supports, const TravelsOverMaterial &with_supports)
+{
+    REQUIRE(without_supports.lengths.extrusion > 0);
+    REQUIRE_THAT(with_supports.lengths.extrusion, Catch::Matchers::WithinAbs(without_supports.lengths.extrusion, 1e-3));
+    REQUIRE(without_supports.extrusion_on_layers > 0.9 * without_supports.lengths.extrusion);
+    REQUIRE(without_supports.extrusion_over_area > 0.99 * without_supports.extrusion_on_layers);
+}
+
+static void report(const char *label, const TravelsOverMaterial &without_supports, const TravelsOverMaterial &with_supports)
+{
+    WARN(label << ": travel " << without_supports.lengths.travel << " -> " << with_supports.lengths.travel
+               << " mm, travel over air " << without_supports.travel_over_air << " -> " << with_supports.travel_over_air
+               << " mm, extrusion " << without_supports.lengths.extrusion << " mm, on mapped layers "
+               << without_supports.extrusion_on_layers << " mm, over the printed area " << without_supports.extrusion_over_area
+               << " mm, support layers " << with_supports.support_layers_with_fills << " (with islands " << with_supports.support_layers_with_islands << ")");
+}
+
 TEST_CASE("Including supports reroutes travels without touching extrusions", "[SupportMaterial][AvoidCrossingPerimeters]")
 {
-    const MoveLengths without_supports = supported_capital_move_lengths(true, false);
-    const MoveLengths with_supports    = supported_capital_move_lengths(true, true);
-    REQUIRE(without_supports.extrusion > 0);
-    REQUIRE_THAT(with_supports.extrusion, Catch::Matchers::WithinAbs(without_supports.extrusion, 1e-3));
-    REQUIRE(std::abs(with_supports.travel - without_supports.travel) > 1.0);
+    const TravelsOverMaterial without_supports = supported_capital_travels({}, false);
+    const TravelsOverMaterial with_supports    = supported_capital_travels({}, true);
+    report("normal support", without_supports, with_supports);
+    require_same_extrusions_and_mapped_coordinates(without_supports, with_supports);
+    REQUIRE(with_supports.support_layers_with_islands > 0);
+    REQUIRE(with_supports.travel_over_air < without_supports.travel_over_air - 1.0);
+}
+
+TEST_CASE("Including supports also reroutes travels around tree supports, which carry no support islands", "[SupportMaterial][AvoidCrossingPerimeters]")
+{
+    const TravelsOverMaterial without_supports = supported_capital_travels({ { "support_type", "tree(auto)" }, { "support_style", "tree_hybrid" } }, false);
+    const TravelsOverMaterial with_supports    = supported_capital_travels({ { "support_type", "tree(auto)" }, { "support_style", "tree_hybrid" } }, true);
+    report("tree support", without_supports, with_supports);
+    REQUIRE(with_supports.support_layers_with_fills > 0);
+    REQUIRE(with_supports.support_layers_with_islands == 0);
+    require_same_extrusions_and_mapped_coordinates(without_supports, with_supports);
+    REQUIRE(with_supports.travel_over_air < without_supports.travel_over_air - 1.0);
 }
 
 static void place_beside_a_plain_cube(TriangleMesh first, bool include_supports, Print &print, Model &model)
