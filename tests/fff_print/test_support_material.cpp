@@ -21,6 +21,7 @@
 #include <math.h>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -661,20 +662,22 @@ static void require_same_extrusions_and_mapped_coordinates(const TravelsOverMate
     REQUIRE(without_supports.extrusion_over_area > 0.99 * without_supports.extrusion_on_layers);
 }
 
-static void describe(const char *label, const TravelsOverMaterial &without_supports, const TravelsOverMaterial &with_supports)
+static std::string describe(const char *label, const TravelsOverMaterial &without_supports, const TravelsOverMaterial &with_supports)
 {
-    UNSCOPED_INFO(label << ": travel " << without_supports.lengths.travel << " -> " << with_supports.lengths.travel
-               << " mm, travel over air " << without_supports.travel_over_air << " -> " << with_supports.travel_over_air
-               << " mm, extrusion " << without_supports.lengths.extrusion << " mm, on mapped layers "
-               << without_supports.extrusion_on_layers << " mm, over the printed area " << without_supports.extrusion_over_area
-               << " mm, support layers " << with_supports.support_layers_with_fills << " (with islands " << with_supports.support_layers_with_islands << ")");
+    std::ostringstream text;
+    text << label << ": travel " << without_supports.lengths.travel << " -> " << with_supports.lengths.travel
+         << " mm, travel over air " << without_supports.travel_over_air << " -> " << with_supports.travel_over_air
+         << " mm, extrusion " << without_supports.lengths.extrusion << " mm, on mapped layers "
+         << without_supports.extrusion_on_layers << " mm, over the printed area " << without_supports.extrusion_over_area
+         << " mm, support layers " << with_supports.support_layers_with_fills << " (with islands " << with_supports.support_layers_with_islands << ")";
+    return text.str();
 }
 
 TEST_CASE("Including supports reroutes travels without touching extrusions", "[SupportMaterial][AvoidCrossingPerimeters]")
 {
     const TravelsOverMaterial without_supports = supported_capital_travels({}, false);
     const TravelsOverMaterial with_supports    = supported_capital_travels({}, true);
-    describe("normal support", without_supports, with_supports);
+    INFO(describe("normal support", without_supports, with_supports));
     require_same_extrusions_and_mapped_coordinates(without_supports, with_supports);
     REQUIRE(with_supports.support_layers_with_islands > 0);
     REQUIRE(with_supports.travel_over_air < without_supports.travel_over_air - 10.0);
@@ -684,7 +687,7 @@ TEST_CASE("Including supports also reroutes travels around tree supports, which 
 {
     const TravelsOverMaterial without_supports = supported_capital_travels({ { "support_type", "tree(auto)" }, { "support_style", "tree_hybrid" } }, false);
     const TravelsOverMaterial with_supports    = supported_capital_travels({ { "support_type", "tree(auto)" }, { "support_style", "tree_hybrid" } }, true);
-    describe("tree support", without_supports, with_supports);
+    INFO(describe("tree support", without_supports, with_supports));
     REQUIRE(with_supports.support_layers_with_fills > 0);
     REQUIRE(with_supports.support_layers_with_islands == 0);
     require_same_extrusions_and_mapped_coordinates(without_supports, with_supports);
