@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       filter:
-        description: Catch2 test spec passed to fff_print_tests (empty runs every test)
+        description: Catch2 test spec passed to fff_print_tests (empty runs every test; a push always runs every test)
         type: string
         default: "[AvoidCrossingPerimeters]"
   push:
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     env:
-      DEPS_DIR: deps/build/OrcaSlicer_dep
+      DEPS_DIR: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
     steps:
       - name: Free disk space
         run: sudo rm -rf /usr/local/lib/android/* /usr/share/dotnet/* /opt/ghc/* /usr/local/share/boost/*
@@ -74,12 +74,13 @@ jobs:
 
       - name: Run fff_print_tests
         env:
-          FILTER: ${{ github.event_name == 'workflow_dispatch' && inputs.filter || '[AvoidCrossingPerimeters]' }}
+          EVENT: ${{ github.event_name }}
+          FILTER: ${{ inputs.filter }}
         run: |
           binary=$(find build/tests/fff_print -type f -name fff_print_tests -perm -u+x | head -n 1)
           test -n "$binary"
           cd "$(dirname "$binary")"
-          if [[ -n "$FILTER" ]]; then
+          if [[ "$EVENT" == workflow_dispatch && -n "$FILTER" ]]; then
             ./fff_print_tests "$FILTER" --durations yes
           else
             ./fff_print_tests --durations yes
