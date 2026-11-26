@@ -1,0 +1,91 @@
+name: fff_print tests Linux (erik)
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: Catch2 test spec passed to fff_print_tests (empty runs every test; a push always runs every test)
+        type: string
+        default: "[AvoidCrossingPerimeters]"
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - "tests/fff_print/**"
+      - ".github/workflows/tests_linux_erik.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fff_print:
+    name: Build and run fff_print_tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      DEPS_DIR: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/local/lib/android/* /usr/share/dotnet/* /opt/ghc/* /usr/local/share/boost/*
+
+      - uses: actions/checkout@v7
+        with:
+          lfs: "false"
+          persist-credentials: false
+
+      - name: Install dependencies
+        uses: ./.github/actions/apt-install-deps
+
+      - uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~4.3.0"
+
+      - name: Deps cache key
+        id: key
+        run: echo "key=linux-clang-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore deps
+        id: restore
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Build deps
+        if: steps.restore.outputs.cache-hit != 'true'
+        run: ./build_linux.sh -drlL
+
+      - name: Save deps
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Build fff_print_tests
+        run: |
+          lld=$(command -v ld.lld)
+          cmake -S . -B build -G "Ninja Multi-Config" \
+            -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_LINKER="$lld" -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
+            -DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=lld \
+            -DSLIC3R_PCH=ON -DORCA_TOOLS=ON -DBUILD_TESTS=ON
+          cmake --build build --config Release --target fff_print_tests
+
+      - name: Run fff_print_tests
+        env:
+          EVENT: ${{ github.event_name }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          binary=$(find build/tests/fff_print -type f -name fff_print_tests -perm -u+x | head -n 1)
+          test -n "$binary"
+          cd "$(dirname "$binary")"
+          if [[ "$EVENT" == workflow_dispatch && -n "$FILTER" ]]; then
+            ./fff_print_tests "$FILTER" --durations yes
+          else
+            ./fff_print_tests --durations yes
+          fi
