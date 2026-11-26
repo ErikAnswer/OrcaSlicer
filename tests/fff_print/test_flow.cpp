@@ -106,6 +106,18 @@ SCENARIO("Flow math for bridges", "[Flow]") {
 
 namespace {
 
+double first_layer_fill_mm3_per_mm(const Print &print)
+{
+    double volume = 0.;
+    double length = 0.;
+    for (const ExtrusionEntity *entity : print.objects().front()->get_layer(0)->regions().front()->fills.flatten().entities) {
+        volume += entity->total_volume();
+        length += unscale<double>(entity->length());
+    }
+    REQUIRE(length > 0.);
+    return volume / length;
+}
+
 struct FirstLayerWidths
 {
     double first_layer_wall;
@@ -137,13 +149,6 @@ FirstLayerWidths first_layer_widths(const char *first_layer_infill_width)
 
     const Layer       &first  = *print.objects().front()->get_layer(0);
     const LayerRegion &region = *first.regions().front();
-    double volume = 0.;
-    double length = 0.;
-    for (const ExtrusionEntity *entity : region.fills.flatten().entities) {
-        volume += entity->total_volume();
-        length += unscale<double>(entity->length());
-    }
-    REQUIRE(length > 0.);
 
     return {
         region.flow(frPerimeter).width(),
@@ -152,7 +157,7 @@ FirstLayerWidths first_layer_widths(const char *first_layer_infill_width)
         region.flow(frSolidInfill).width(),
         region.flow(frTopSolidInfill).width(),
         print.objects().front()->get_layer(1)->regions().front()->flow(frSolidInfill).width(),
-        volume / length,
+        first_layer_fill_mm3_per_mm(print),
         Slic3r::Test::gcode(print),
     };
 }
@@ -208,22 +213,6 @@ TEST_CASE("First layer infill line width of zero resolves to the first layer lin
     config.set_deserialize_strict({ { "initial_layer_infill_line_width", "0.8" } });
     CHECK_THAT(Flow::extrusion_width("initial_layer_infill_line_width", config), Catch::Matchers::WithinAbs(0.8, 1e-4));
 }
-
-namespace {
-
-double first_layer_fill_mm3_per_mm(const Print &print)
-{
-    double volume = 0.;
-    double length = 0.;
-    for (const ExtrusionEntity *entity : print.objects().front()->get_layer(0)->regions().front()->fills.flatten().entities) {
-        volume += entity->total_volume();
-        length += unscale<double>(entity->length());
-    }
-    REQUIRE(length > 0.);
-    return volume / length;
-}
-
-} // namespace
 
 TEST_CASE("Changing the first layer infill line width on a processed print regenerates the first layer infill", "[Flow]")
 {
