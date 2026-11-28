@@ -10101,7 +10101,10 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 if (imperial_units)
                     // Convert even if the object is big.
                     convert_from_imperial_units(model, false);
-                else if (model.looks_like_saved_in_meters()) {
+                // Remote API loads keep the units of the file: nothing could answer the question, and a part
+                // scaled on its own would leave its place among the others.
+                else if (RemoteAPI::Controller::api_ui_task_active()) {
+                } else if (model.looks_like_saved_in_meters()) {
                     // BBS do not handle look like in meters
                     MessageDialog dlg(q,
                                       format_wxstr(_L("The object from file %s is too small, and may be in meters or inches.\nDo you want to scale to millimeters\?"),

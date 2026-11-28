@@ -45,6 +45,29 @@ namespace Slic3r { namespace GUI { namespace RemoteAPI {
 namespace fs = boost::filesystem;
 using nlohmann::json;
 
+std::string McpActions::part_setting_raw(const ModelObject &mo, const ModelVolume &volume, const std::string &key,
+                                         const DynamicPrintConfig &merged)
+{
+    if (volume.config.has(key)) return volume.config.opt_serialize(key);
+    if (mo.config.has(key)) return mo.config.opt_serialize(key);
+    if (merged.has(key)) return merged.opt_serialize(key);
+    return key == "extruder" ? std::string("0") : std::string();
+}
+
+void McpActions::refresh_volume_extruder_column(int obj_idx, int vol_idx, const ModelObject &mo)
+{
+    if (mo.volumes.size() < 2) return;
+    ObjectList          *obj_list = wxGetApp().obj_list();
+    ObjectDataViewModel *om       = obj_list == nullptr ? nullptr : obj_list->GetModel();
+    if (om == nullptr) return;
+    wxDataViewItem item = om->GetItemByVolumeId(obj_idx, om->get_real_volume_index_in_ui(obj_idx, vol_idx));
+    if (!item.IsOk()) return;
+    const ModelVolume &volume = *mo.volumes[vol_idx];
+    const int          ext    = volume.config.has("extruder") ? volume.config.extruder() : 0;
+    om->SetExtruder(ext == 0 ? _L("default") : wxString::Format("%d", ext), item);
+    obj_list->Refresh();
+}
+
 std::atomic<bool> McpActions::s_restoring{false};
 
 namespace {
@@ -257,16 +280,6 @@ int part_index(const ModelObject &mo, const json &t, bool current)
     return found;
 }
 
-// The value a part prints a key with: its own, else the object's, else the presets'.
-std::string part_setting_raw(const ModelObject &mo, const ModelVolume &volume, const std::string &key,
-                             const DynamicPrintConfig &merged)
-{
-    if (volume.config.has(key)) return volume.config.opt_serialize(key);
-    if (mo.config.has(key)) return mo.config.opt_serialize(key);
-    if (merged.has(key)) return merged.opt_serialize(key);
-    return key == "extruder" ? std::string("0") : std::string();
-}
-
 // ---- live values ------------------------------------------------------------------------------------------------
 
 // Current index of the plate a POST /plates row created: -1 when it is gone, -2 when it is not known (another app
@@ -426,7 +439,7 @@ Live live_of(const McpRow &r)
         if (vi == -2) return {};
         if (vi < 0) return live_value(std::string(kRemovedSince));
         const std::string key = t.value("key", std::string());
-        return live_value(config_live_text(r, key, part_setting_raw(*mo, *mo->volumes[vi], key, bundle->full_config())));
+        return live_value(config_live_text(r, key, McpActions::part_setting_raw(*mo, *mo->volumes[vi], key, bundle->full_config())));
     }
     if (type == "object_config") {
         const std::string key = t.value("key", std::string());
@@ -554,21 +567,6 @@ void refresh_extruder_column(int oi, const ModelObject *mo)
     wxDataViewItem item = om->GetItemById(oi);
     if (!item.IsOk()) return;
     const int ext = mo->config.has("extruder") ? mo->config.extruder() : 0;
-    om->SetExtruder(ext == 0 ? _L("default") : wxString::Format("%d", ext), item);
-    obj_list->Refresh();
-}
-
-// The filament column of one volume's row; an object with a single part has no row for it.
-void refresh_volume_extruder_column(int oi, int vi, const ModelObject &mo)
-{
-    if (mo.volumes.size() < 2) return;
-    ObjectList          *obj_list = wxGetApp().obj_list();
-    ObjectDataViewModel *om       = obj_list == nullptr ? nullptr : obj_list->GetModel();
-    if (om == nullptr) return;
-    wxDataViewItem item = om->GetItemByVolumeId(oi, vi);
-    if (!item.IsOk()) return;
-    const ModelVolume &volume = *mo.volumes[vi];
-    const int          ext    = volume.config.has("extruder") ? volume.config.extruder() : 0;
     om->SetExtruder(ext == 0 ? _L("default") : wxString::Format("%d", ext), item);
     obj_list->Refresh();
 }
@@ -830,7 +828,7 @@ std::string undo_row(const McpRow &r, bool &cancelled, std::string &note)
         Plater::TakeSnapshot snapshot(p, "Change Part Settings");
         volume->config.assign_config(std::move(cfg));
         p->changed_object(oi);
-        if (key == "extruder") refresh_volume_extruder_column(oi, vi, *mo);
+        if (key == "extruder") McpActions::refresh_volume_extruder_column(oi, vi, *mo);
         return {};
     }
     if (type == "object_config") {

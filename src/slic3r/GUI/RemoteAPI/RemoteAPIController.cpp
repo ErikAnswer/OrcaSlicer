@@ -2639,6 +2639,18 @@ Response Controller::handle_load_model_parts(const nlohmann::json &in)
         }
         if (idxs.empty())
             return refuse({{"error", "load_failed"}});
+        // A file that could not be read is skipped by load_files(): an object short of a part is not the model.
+        size_t loaded_parts = 0;
+        for (size_t i : idxs)
+            for (const ModelVolume *v : plater->model().objects[i]->volumes)
+                if (v->is_model_part()) ++loaded_parts;
+        if (idxs.size() != 1 || loaded_parts < files.size()) {
+            std::vector<size_t> added = idxs;
+            std::sort(added.rbegin(), added.rend());
+            for (size_t i : added) plater->remove(i);
+            return refuse({{"error", "load_failed"}, {"files", files.size()}, {"parts_read", loaded_parts},
+                           {"detail", "not every file could be read as a part; nothing was added"}});
+        }
         nlohmann::json objects = nlohmann::json::array();
         for (size_t i : idxs) {
             const ModelObject *mo = plater->model().objects[i];
@@ -3258,22 +3270,6 @@ static nlohmann::json volume_settings_errors(const nlohmann::json &settings, Dyn
     return errors;
 }
 
-// The object list's filament column for one volume, as ObjectList::set_extruder_for_selected_items() writes it. An
-// object with a single part has no row for it.
-static void refresh_volume_extruder_column(int obj_idx, int vol_idx, const ModelObject &mo)
-{
-    if (mo.volumes.size() < 2) return;
-    ObjectList          *obj_list = wxGetApp().obj_list();
-    ObjectDataViewModel *om       = obj_list == nullptr ? nullptr : obj_list->GetModel();
-    if (om == nullptr) return;
-    wxDataViewItem item = om->GetItemByVolumeId(obj_idx, vol_idx);
-    if (!item.IsOk()) return;
-    const ModelVolume &volume = *mo.volumes[vol_idx];
-    const int          ext    = volume.config.has("extruder") ? volume.config.extruder() : 0;
-    om->SetExtruder(ext == 0 ? _L("default") : wxString::Format("%d", ext), item);
-    obj_list->Refresh();
-}
-
 // PUT /api/v1/objects/{id}/part_config  body {"part_id": <id under parts or modifiers in GET /objects>, "config": {...}}
 // A part's or a modifier's own settings, all or nothing: "extruder" (1-based filament, 0 = the object's) and the
 // per-region keys. What Change Filament and the part's settings do in the object list.
@@ -3318,11 +3314,7 @@ Response Controller::handle_put_part_config(uint64_t id, const std::string &body
             const std::string &key = it.key();
             applied.push_back(key);
             const bool        had        = before.has(key);
-            const std::string before_raw = had                   ? before.opt_serialize(key)
-                                           : mo->config.has(key) ? mo->config.opt_serialize(key)
-                                           : merged.has(key)     ? merged.opt_serialize(key)
-                                           : key == "extruder"   ? std::string("0")
-                                                                 : std::string();
+            const std::string before_raw = McpActions::part_setting_raw(*mo, *volume, key, merged);
             const std::string after_raw = cfg.opt_serialize(key);
             if (had && before_raw == after_raw) continue;
             const std::string label = mcp_setting_label(key);
@@ -3336,13 +3328,15 @@ Response Controller::handle_put_part_config(uint64_t id, const std::string &body
                                          {{"label", label}, {"object", subject}});
             rows.push_back(std::move(row));
         }
-        if (!rows.empty()) mcp_before_change();
-        Plater::TakeSnapshot snapshot(plater, "Change Part Settings");
-        volume->config.assign_config(std::move(cfg));
-        plater->changed_object(idx);
-        if (settings.contains("extruder")) refresh_volume_extruder_column(idx, vi, *mo);
-        api_notify("Updated " + std::to_string(applied.size()) + " setting(s) on '" + volume->name + "' of '" + mo->name + "'");
-        for (McpRow &row : rows) mcp_record(std::move(row));
+        if (!rows.empty()) {
+            mcp_before_change();
+            Plater::TakeSnapshot snapshot(plater, "Change Part Settings");
+            volume->config.assign_config(std::move(cfg));
+            plater->changed_object(idx);
+            if (settings.contains("extruder")) McpActions::refresh_volume_extruder_column(idx, vi, *mo);
+            api_notify("Updated " + std::to_string(rows.size()) + " setting(s) on '" + volume->name + "' of '" + mo->name + "'");
+            for (McpRow &row : rows) mcp_record(std::move(row));
+        }
 
         nlohmann::json vcfg = nlohmann::json::object();
         for (const std::string &k : volume->config.keys()) vcfg[k] = volume->config.opt_serialize(k);
