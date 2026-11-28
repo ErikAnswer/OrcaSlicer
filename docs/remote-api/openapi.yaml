@@ -551,6 +551,76 @@ paths:
               example: { error: "invalid_config", errors: { layer_height: "not_a_modifier_setting" } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "504": { $ref: "#/components/responses/UiTimeout" }
+  /objects/{id}/part_config:
+    put:
+      summary: Settings of one part or modifier of an object
+      operationId: putObjectPartConfig
+      description: |
+        Sets the own settings of one volume of the object, a printed part or a
+        modifier: `extruder` (1-based filament, 0 for the object's) and the
+        per-region keys (walls, infill, ...), merged into the ones it has. The
+        same checks as `PUT /objects/{id}/config` apply, all or nothing.
+        `part_id` is the volume's id under `parts` or `modifiers` in
+        `GET /objects`. The MCP panel records each changed key with a Revert
+        action. An object loaded with `POST /model` and `parts` has one part
+        per file.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: Object id as reported by GET /objects.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [part_id, config]
+              properties:
+                part_id: { type: integer }
+                config: { type: object, additionalProperties: true, minProperties: 1 }
+            example: { part_id: 901, config: { extruder: 2 } }
+      responses:
+        "200":
+          description: Applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  object: { type: string }
+                  applied: { type: array, items: { type: string } }
+                  part:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      name: { type: string }
+                      type: { type: string, enum: [part, modifier] }
+                      extruder: { type: integer }
+                      config: { type: object, additionalProperties: { type: string } }
+              example: { id: 832, object: "temple", applied: [extruder], part: { id: 901, name: "temple_gold", type: part, extruder: 2, config: { extruder: "2" } } }
+        "400":
+          description: Missing `part_id`, or `config` is not an object with at least one key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "missing_part_id" }
+        "404":
+          description: Unknown object, or it has no part or modifier with that id.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "unknown_part" }
+        "422":
+          description: A setting a part can't take, or out of range; nothing was changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "invalid_config", errors: { layer_height: "not_a_modifier_setting" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "504": { $ref: "#/components/responses/UiTimeout" }
   /project:
     get:
       summary: Project name, path and dirty state

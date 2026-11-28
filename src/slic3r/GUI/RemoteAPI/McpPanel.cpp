@@ -187,7 +187,7 @@ json local_words(const McpRow &r, const std::string &language)
 {
     std::string key, type = r.target.is_object() ? r.target.value("type", std::string()) : std::string();
     bool        listed = false; // the label lists setting names ("Start G-code, End G-code"): a connector's refusal
-    if (type == "config" || type == "object_config") key = r.target.value("key", std::string());
+    if (type == "config" || type == "object_config" || type == "part_config") key = r.target.value("key", std::string());
     else if (type == "refused") {
         const std::string action = r.target.value("action", std::string());
         if (action == "note") listed = true;

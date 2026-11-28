@@ -16,6 +16,9 @@
 //      credential key or a host URL holding a login (those rows have no undo).
 //   {"type":"object_config", "object_id", "key", "had_override": bool, "before_raw" (the old override, or the
 //    merged config's value when there was none), "after_raw"}                      PUT /objects/{id}/config
+//   {"type":"part_config", "object_id", "object" (its name), "volume_id", "part" (the volume's name), "key",
+//    "had_override": bool, "before_raw" (the old override, or the value the part printed with), "after_raw"}
+//                                                                                   PUT /objects/{id}/part_config
 //   {"type":"layer_profile", "object_id", "before": [doubles] (empty = no custom profile), "after": [doubles]}
 //                                                                                   PUT /objects/{id}/layer_height
 //   {"type":"height_range", "object_id", "min_z", "max_z", "before": null | {key: raw}, "after": {key: raw}}

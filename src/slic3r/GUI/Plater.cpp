@@ -10284,7 +10284,10 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
 
         bool new_model_auto_drop = true;
         int single_object_answer = false;
-        if (ask_multi) {
+        if (ask_multi && q->load_files_as_single_object) {
+            single_object_answer = wxID_YES;
+            new_model->convert_multipart_object(filaments_cnt);
+        } else if (ask_multi) {
             RichMessageDialog dlg(q, _L("Load these files as a single object with multiple parts?\n"),
                 _L("An object with multiple parts was detected"), wxICON_QUESTION | wxYES_NO);
 

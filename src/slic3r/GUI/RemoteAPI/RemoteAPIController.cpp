@@ -779,7 +779,7 @@ Response Controller::handle_status()
             {"plates", {{"count", plates.get_plate_count()}, {"current", plates.get_curr_plate_index()}}},
             {"app_version", SoftFever_VERSION},
             {"api_version", "1.0"},
-            {"capabilities", {"status", "config", "slice", "events", "model", "preset", "gcode", "objects", "arrange", "orient", "object_config", "slice_breakdown", "plate_render", "sensitive_key_policy", "plates", "printer_slots", "project", "preset_slot", "activity", "filament_slots", "bambu_ams", "preset_temperature_check", "bambu_status", "printer_select"}},
+            {"capabilities", {"status", "config", "slice", "events", "model", "preset", "gcode", "objects", "arrange", "orient", "object_config", "slice_breakdown", "plate_render", "sensitive_key_policy", "plates", "printer_slots", "project", "preset_slot", "activity", "filament_slots", "bambu_ams", "preset_temperature_check", "bambu_status", "printer_select", "object_parts"}},
             {"sensitive_keys_allowed", sensitive_writes_allowed()},
             {"project_file_changes_allowed", project_file_changes_allowed()},
             {"project", plater->get_project_filename(".3mf").ToUTF8().data()},
@@ -2315,6 +2315,7 @@ namespace {
 const std::set<std::string> MODEL_URL_HOSTS = {"impresora3d.casa", "192.168.1.17", "impresora3d.tail5f3ef6.ts.net"};
 const std::vector<std::string> MODEL_URL_EXTENSIONS = {".stl", ".obj", ".step", ".stp"};
 constexpr size_t MODEL_DOWNLOAD_LIMIT = size_t(512) * 1024 * 1024;
+constexpr size_t MODEL_PARTS_LIMIT    = 32;
 
 std::string to_lower_ascii(std::string text)
 {
@@ -2414,9 +2415,35 @@ nlohmann::json download_model(const std::string &url, const std::string &filenam
 
 } // namespace
 
+// The printed parts of an object, for GET /objects and the multipart load: the filament each prints with (0 = the
+// object's), its own settings and the box instance 0 puts it in on the bed.
+static nlohmann::json object_parts_json(const ModelObject &mo)
+{
+    nlohmann::json    parts = nlohmann::json::array();
+    const Transform3d inst  = mo.instances.empty() ? Transform3d::Identity() : mo.instances.front()->get_matrix();
+    for (const ModelVolume *v : mo.volumes) {
+        if (!v->is_model_part()) continue;
+        nlohmann::json cfg = nlohmann::json::object();
+        for (const std::string &k : v->config.keys()) cfg[k] = v->config.opt_serialize(k);
+        nlohmann::json part = {{"id", (uint64_t) v->id().id}, {"name", v->name}, {"type", "part"},
+                               {"extruder", v->config.has("extruder") ? v->config.extruder() : 0}, {"config", cfg}};
+        const BoundingBoxf3 bb = v->mesh().transformed_bounding_box(inst * v->get_matrix());
+        if (bb.defined) {
+            const Vec3d sz = bb.size();
+            part["size_mm"]  = {sz.x(), sz.y(), sz.z()};
+            part["bbox_min"] = {bb.min.x(), bb.min.y(), bb.min.z()};
+            part["bbox_max"] = {bb.max.x(), bb.max.y(), bb.max.z()};
+        }
+        parts.push_back(std::move(part));
+    }
+    return parts;
+}
+
 Response Controller::handle_load_model(const std::string &body)
 {
     nlohmann::json in = nlohmann::json::parse(body); // parse_error -> 400 in dispatch route
+    if (in.is_object() && in.contains("parts"))
+        return handle_load_model_parts(in);
     std::string path;
     std::string url;
     if (in.is_object() && in.contains("url") && in["url"].is_string()) {
@@ -2521,6 +2548,118 @@ Response Controller::handle_load_model(const std::string &body)
         return { 422, r };
     }
     api_notify("Added " + fn + " to the plate");
+    return { 200, r };
+}
+
+// POST /api/v1/model  body {"parts": ["<orca-host path or library URL>", ...]}
+// Several files as one object with a part per file, each where its file puts it relative to the others: dragging
+// them in together and answering Yes to "Load these files as a single object with multiple parts?". Plain meshes
+// and STEP only, as URL loads.
+Response Controller::handle_load_model_parts(const nlohmann::json &in)
+{
+    const nlohmann::json &list = in["parts"];
+    if (!list.is_array() || list.size() < 2 || list.size() > MODEL_PARTS_LIMIT ||
+        !std::all_of(list.begin(), list.end(), [](const nlohmann::json &v) { return v.is_string(); }))
+        return { 400, {{"error", "bad_parts"}, {"detail", "parts: 2 to 32 file paths or library URLs"}} };
+
+    struct Source
+    {
+        std::string path;
+        std::string url;
+    };
+    std::vector<Source> sources;
+    for (const nlohmann::json &entry : list) {
+        Source source{entry.get<std::string>(), std::string()};
+        if (boost::istarts_with(source.path, "http://") || boost::istarts_with(source.path, "https://")) {
+            source.url = source.path;
+            if (MODEL_URL_HOSTS.count(model_url_host(source.url)) == 0)
+                return { 403, {{"error", "url_not_allowed"}, {"part", source.url},
+                               {"detail", "URL loads only accept the home model library"}} };
+            source.path = model_filename_from_url(source.url);
+        }
+        if (!is_model_url_extension(source.path))
+            return { 422, {{"error", "unsupported_format"}, {"part", entry},
+                           {"detail", "parts support .stl, .obj, .step, .stp"}} };
+        sources.push_back(std::move(source));
+    }
+
+    std::vector<std::string> paths;
+    bool                     has_step = false;
+    for (const Source &source : sources) {
+        std::string path = source.path;
+        if (!source.url.empty()) {
+            nlohmann::json err = download_model(source.url, source.path, path);
+            if (!err.is_null()) {
+                api_notify("Couldn't download " + source.path, true);
+                err["part"] = source.url;
+                return { 502, err };
+            }
+        }
+        const std::string lower = to_lower_ascii(path);
+        has_step = has_step || boost::ends_with(lower, ".step") || boost::ends_with(lower, ".stp");
+        paths.push_back(std::move(path));
+    }
+
+    nlohmann::json r = run_on_ui([paths, has_step]() -> nlohmann::json {
+        auto refuse = [](nlohmann::json e) -> nlohmann::json {
+            mcp_refused_reply(MCP_T("Add model"), e, "POST /model");
+            return e;
+        };
+        std::vector<boost::filesystem::path> files;
+        for (const std::string &path : paths) {
+            if (!mcp_history_refusal(path).is_null())
+                return refuse({{"error", "protected_path"}, {"part", path}});
+            if (!boost::filesystem::exists(path))
+                return refuse({{"error", "file_not_found"}, {"part", path}});
+            files.emplace_back(path);
+        }
+        Plater *plater = wxGetApp().plater();
+        mcp_before_change();
+        AppConfig *cfg = wxGetApp().app_config;
+        const bool prev_mesh_dlg  = cfg->get_bool("enable_step_mesh_setting");
+        const bool prev_utf8_warn = cfg->get_bool("step_not_utf8_no_warn");
+        if (has_step) {
+            cfg->set_bool("enable_step_mesh_setting", false);
+            cfg->set_bool("step_not_utf8_no_warn", true);
+        }
+        Plater::TakeSnapshot snapshot(plater, "Import Object");
+        std::vector<size_t>  idxs;
+        {
+            struct SingleObject
+            {
+                Plater *plater;
+                explicit SingleObject(Plater *plater) : plater(plater) { plater->load_files_as_single_object = true; }
+                ~SingleObject() { plater->load_files_as_single_object = false; }
+            } single_object(plater);
+            idxs = plater->load_files(files, LoadStrategy::LoadModel, /*ask_multi=*/true);
+        }
+        if (has_step) {
+            cfg->set_bool("enable_step_mesh_setting", prev_mesh_dlg);
+            cfg->set_bool("step_not_utf8_no_warn", prev_utf8_warn);
+        }
+        if (idxs.empty())
+            return refuse({{"error", "load_failed"}});
+        nlohmann::json objects = nlohmann::json::array();
+        for (size_t i : idxs) {
+            const ModelObject *mo = plater->model().objects[i];
+            auto sz = mo->bounding_box_exact().size();
+            objects.push_back({{"index", i}, {"id", (uint64_t) mo->id().id}, {"name", mo->name},
+                               {"size_mm", {sz.x(), sz.y(), sz.z()}}, {"parts", object_parts_json(*mo)}});
+            McpRow row = mcp_row("model", MCP_T("Added"), mo->name, std::string(), mcp_size_text(*mo));
+            row.title_hint = "added";
+            row.target     = {{"type", "added"}, {"object_id", (uint64_t) mo->id().id}};
+            mcp_undo(row, MCP_T("Remove"), mcp_fmt(MCP_T("Remove {name} from the plate"), {{"name", mo->name}}));
+            mcp_record(std::move(row));
+        }
+        return {{"loaded", true}, {"single_object", idxs.size() == 1}, {"objects", objects}};
+    }, /*timeout_s=*/120);
+    if (r.contains("error")) {
+        api_notify("Couldn't load the parts", true);
+        if (r["error"] == "file_not_found") return { 404, r };
+        if (r["error"] == "protected_path") return { 403, r };
+        return { 422, r };
+    }
+    api_notify("Added " + std::to_string(paths.size()) + " files as one object");
     return { 200, r };
 }
 
@@ -3091,6 +3230,131 @@ Response Controller::handle_put_height_range(uint64_t id, const std::string &bod
     return { 200, r };
 }
 
+// A part's or a modifier's own settings from a request: "extruder" and the per-region keys, each checked as
+// PUT /objects/{id}/config checks them. Written into cfg; returns {key: reason} for the ones refused.
+static nlohmann::json volume_settings_errors(const nlohmann::json &settings, DynamicPrintConfig &cfg)
+{
+    const DynamicPrintConfig merged          = wxGetApp().preset_bundle->full_config();
+    const bool               allow_sensitive = sensitive_writes_allowed();
+    const int                filaments       = int(wxGetApp().preset_bundle->filament_presets.size());
+    nlohmann::json           errors          = nlohmann::json::object();
+    for (auto it = settings.begin(); it != settings.end(); ++it) {
+        const std::string &key = it.key();
+        if (key != "extruder" && !PrintRegionConfig::defaults().has(key)) { errors[key] = "not_a_modifier_setting"; continue; }
+        if (!allow_sensitive && is_sensitive_config_key(key)) { errors[key] = "blocked_by_remote_api_policy"; continue; }
+        try {
+            cfg.set_deserialize_strict(key, json_value_to_config_string(it.value()));
+            if (key == "extruder") {
+                const int ext = cfg.opt_int("extruder");
+                if (ext < 0 || ext > filaments) errors[key] = "out_of_range: 0 (the object's) to " + std::to_string(filaments);
+                continue;
+            }
+            nlohmann::json rd;
+            std::string    rtext;
+            if (!Controller::config_value_in_range(key, merged.option(key), *cfg.option(key), rd, rtext))
+                errors[key] = "out_of_range: " + rtext;
+        } catch (const std::exception &e) { errors[key] = e.what(); }
+    }
+    return errors;
+}
+
+// The object list's filament column for one volume, as ObjectList::set_extruder_for_selected_items() writes it. An
+// object with a single part has no row for it.
+static void refresh_volume_extruder_column(int obj_idx, int vol_idx, const ModelObject &mo)
+{
+    if (mo.volumes.size() < 2) return;
+    ObjectList          *obj_list = wxGetApp().obj_list();
+    ObjectDataViewModel *om       = obj_list == nullptr ? nullptr : obj_list->GetModel();
+    if (om == nullptr) return;
+    wxDataViewItem item = om->GetItemByVolumeId(obj_idx, vol_idx);
+    if (!item.IsOk()) return;
+    const ModelVolume &volume = *mo.volumes[vol_idx];
+    const int          ext    = volume.config.has("extruder") ? volume.config.extruder() : 0;
+    om->SetExtruder(ext == 0 ? _L("default") : wxString::Format("%d", ext), item);
+    obj_list->Refresh();
+}
+
+// PUT /api/v1/objects/{id}/part_config  body {"part_id": <id under parts or modifiers in GET /objects>, "config": {...}}
+// A part's or a modifier's own settings, all or nothing: "extruder" (1-based filament, 0 = the object's) and the
+// per-region keys. What Change Filament and the part's settings do in the object list.
+Response Controller::handle_put_part_config(uint64_t id, const std::string &body)
+{
+    nlohmann::json in = nlohmann::json::parse(body);
+    if (!in.is_object())
+        return { 400, {{"error", "body_must_be_object"}} };
+    if (!in.contains("part_id") || !in["part_id"].is_number_unsigned())
+        return { 400, {{"error", "missing_part_id"}} };
+    const uint64_t       part_id  = in["part_id"].get<uint64_t>();
+    const nlohmann::json settings = in.value("config", nlohmann::json());
+    if (!settings.is_object() || settings.empty())
+        return { 400, {{"error", "config_must_be_object"}} };
+
+    nlohmann::json r = run_on_ui([id, part_id, settings]() -> nlohmann::json {
+        auto refuse = [id](nlohmann::json e) -> nlohmann::json {
+            mcp_refused_reply(mcp_fmt(MCP_T("Object settings {n}"), {{"n", std::to_string(id)}}), e,
+                              "PUT /objects/{id}/part_config");
+            return e;
+        };
+        Plater   *plater = wxGetApp().plater();
+        const int idx    = find_object_index(plater->model(), id);
+        if (idx < 0) return refuse({{"error", "unknown_object"}});
+        ModelObject *mo = plater->model().objects[idx];
+        int          vi = -1;
+        for (size_t i = 0; i < mo->volumes.size(); ++i)
+            if ((uint64_t) mo->volumes[i]->id().id == part_id) { vi = int(i); break; }
+        if (vi < 0 || !(mo->volumes[vi]->is_model_part() || mo->volumes[vi]->is_modifier()))
+            return refuse({{"error", "unknown_part"}});
+        ModelVolume             *volume = mo->volumes[vi];
+        const DynamicPrintConfig before = volume->config.get();
+        DynamicPrintConfig       cfg    = before;
+        const nlohmann::json     errors = volume_settings_errors(settings, cfg);
+        if (!errors.empty()) return refuse({{"error", "invalid_config"}, {"errors", errors}});
+
+        const std::string        subject = mo->name + " \xE2\x80\xBA " + volume->name;
+        const DynamicPrintConfig merged  = wxGetApp().preset_bundle->full_config();
+        nlohmann::json           applied = nlohmann::json::array();
+        std::vector<McpRow>      rows;
+        for (auto it = settings.begin(); it != settings.end(); ++it) {
+            const std::string &key = it.key();
+            applied.push_back(key);
+            const bool        had        = before.has(key);
+            const std::string before_raw = had                   ? before.opt_serialize(key)
+                                           : mo->config.has(key) ? mo->config.opt_serialize(key)
+                                           : merged.has(key)     ? merged.opt_serialize(key)
+                                           : key == "extruder"   ? std::string("0")
+                                                                 : std::string();
+            const std::string after_raw = cfg.opt_serialize(key);
+            if (had && before_raw == after_raw) continue;
+            const std::string label = mcp_setting_label(key);
+            McpRow row = mcp_config_row(key, label, before_raw, after_raw,
+                                        {{"type", "part_config"}, {"object_id", id}, {"object", mo->name},
+                                         {"volume_id", part_id}, {"part", volume->name}, {"key", key}, {"had_override", had}},
+                                        mcp_fmt(MCP_T("{object} only"), {{"object", subject}}));
+            row.undo_tip = had ? mcp_fmt(MCP_T("Set {label} on {object} back to {before}"),
+                                         {{"label", label}, {"object", subject}, {"before", row.before}})
+                               : mcp_fmt(MCP_T("Remove the {label} override from {object}"),
+                                         {{"label", label}, {"object", subject}});
+            rows.push_back(std::move(row));
+        }
+        if (!rows.empty()) mcp_before_change();
+        Plater::TakeSnapshot snapshot(plater, "Change Part Settings");
+        volume->config.assign_config(std::move(cfg));
+        plater->changed_object(idx);
+        if (settings.contains("extruder")) refresh_volume_extruder_column(idx, vi, *mo);
+        api_notify("Updated " + std::to_string(applied.size()) + " setting(s) on '" + volume->name + "' of '" + mo->name + "'");
+        for (McpRow &row : rows) mcp_record(std::move(row));
+
+        nlohmann::json vcfg = nlohmann::json::object();
+        for (const std::string &k : volume->config.keys()) vcfg[k] = volume->config.opt_serialize(k);
+        return {{"id", id}, {"object", mo->name}, {"applied", applied},
+                {"part", {{"id", part_id}, {"name", volume->name}, {"type", volume->is_model_part() ? "part" : "modifier"},
+                          {"extruder", volume->config.has("extruder") ? volume->config.extruder() : 0}, {"config", vcfg}}}};
+    }, /*timeout_s=*/120);
+    if (r.contains("error"))
+        return { r["error"] == "unknown_object" || r["error"] == "unknown_part" ? 404 : 422, r };
+    return { 200, r };
+}
+
 // POST /api/v1/objects/{id}/modifier
 //   body {"shape":"cylinder","size_mm":[diameter,height]} | {"shape":"box","size_mm":[x,y,z]}
 //        "center_mm":[dx,dy]  where its centre goes, from the centre of the object's bounding box (default [0,0])
@@ -3141,29 +3405,9 @@ Response Controller::handle_post_object_modifier(uint64_t id, const std::string 
         ModelObject *mo = plater->model().objects[idx];
         if (mo->instances.empty()) return refuse({{"error", "no_instance"}});
 
-        const DynamicPrintConfig merged          = wxGetApp().preset_bundle->full_config();
-        const bool               allow_sensitive = sensitive_writes_allowed();
-        const int                filaments       = int(wxGetApp().preset_bundle->filament_presets.size());
-        DynamicPrintConfig       cfg;
+        DynamicPrintConfig cfg;
         cfg.set_key_value("extruder", new ConfigOptionInt(0));
-        nlohmann::json errors = nlohmann::json::object();
-        for (auto it = settings.begin(); it != settings.end(); ++it) {
-            const std::string &key = it.key();
-            if (key != "extruder" && !PrintRegionConfig::defaults().has(key)) { errors[key] = "not_a_modifier_setting"; continue; }
-            if (!allow_sensitive && is_sensitive_config_key(key)) { errors[key] = "blocked_by_remote_api_policy"; continue; }
-            try {
-                cfg.set_deserialize_strict(key, json_value_to_config_string(it.value()));
-                if (key == "extruder") {
-                    const int ext = cfg.opt_int("extruder");
-                    if (ext < 0 || ext > filaments) errors[key] = "out_of_range: 0 (the object's) to " + std::to_string(filaments);
-                    continue;
-                }
-                nlohmann::json rd;
-                std::string    rtext;
-                if (!config_value_in_range(key, merged.option(key), *cfg.option(key), rd, rtext))
-                    errors[key] = "out_of_range: " + rtext;
-            } catch (const std::exception &e) { errors[key] = e.what(); }
-        }
+        const nlohmann::json errors = volume_settings_errors(settings, cfg);
         if (!errors.empty()) return refuse({{"error", "invalid_config"}, {"errors", errors}});
 
         const BoundingBoxf3 bb = mo->instance_bounding_box(0);
@@ -3522,6 +3766,7 @@ Response Controller::handle_get_objects()
                                     {"layer_height", kv.second.has("layer_height") ? kv.second.opt_float("layer_height") : 0.0}});
                 o["height_ranges"] = rngs;
             }
+            o["parts"] = object_parts_json(*mo);
             {
                 nlohmann::json mods = nlohmann::json::array();
                 for (const ModelVolume *v : mo->volumes) {
@@ -7075,6 +7320,10 @@ Response Controller::dispatch_route(const Request &req)
                 }
                 if (req.method == "PUT" && action == "height_range") {
                     try { return handle_put_height_range(oid, req.body); }
+                    catch (const nlohmann::json::parse_error &) { return { 400, {{"error", "invalid_json"}} }; }
+                }
+                if (req.method == "PUT" && action == "part_config") {
+                    try { return handle_put_part_config(oid, req.body); }
                     catch (const nlohmann::json::parse_error &) { return { 400, {{"error", "invalid_json"}} }; }
                 }
                 if (req.method == "POST" && action == "modifier") {

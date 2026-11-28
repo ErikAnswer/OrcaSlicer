@@ -145,6 +145,7 @@ bool mcp_row_revealable(const McpRow &row);
 // such a row keeps the earlier rule.
 //   config         "config|<scope>|<key>|<index>|<preset>"   (index and preset as recorded, "" when none)
 //   object_config  "object_config|<object_id>|<key>"
+//   part_config    "part_config|<object_id>|<volume_id>|<key>"
 //   preset         "preset|<preset_type>|<slot>"
 //   slot_mapping   "slot_mapping|<filament>"
 //   layer_profile  "layer_profile|<object_id>"

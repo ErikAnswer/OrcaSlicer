@@ -55,7 +55,7 @@ Base URL: `http://<host>:13130/api/v1`
 | GET | `/slice/status` | Current/last slice state + stats + warnings |
 | POST | `/slice/cancel` | Stop a running slice, or clear a stuck `slicing` state |
 | GET | `/gcode` | The G-code of the current plate's last slice (`409` until it is sliced) |
-| POST | `/model` | Load a model: `{"path": "<file on this machine>"}` or `{"url": "http://impresora3d.casa/api/download?root=out&path=<file>"}` (home library hosts only; the name comes from the last path segment or the `path` parameter; .stl/.obj/.step/.stp, no .3mf) |
+| POST | `/model` | Load a model: `{"path": "<file on this machine>"}` or `{"url": "http://impresora3d.casa/api/download?root=out&path=<file>"}` (home library hosts only; the name comes from the last path segment or the `path` parameter; .stl/.obj/.step/.stp, no .3mf). `{"parts": ["<file or library URL>", ...]}` (2 to 32, .stl/.obj/.step/.stp) loads them as one object with a part per file, each where its file puts it relative to the others |
 | GET | `/objects` | Objects on the bed: id, name, size, position, rotation, scale, bounding box, plate |
 | DELETE | `/objects/{id}` | Delete an object |
 | POST | `/objects/{id}/transform` | Move, rotate (degrees) or scale an object (`translate`, `rotate`, `scale`) |
@@ -64,6 +64,7 @@ Base URL: `http://<host>:13130/api/v1`
 | PUT | `/objects/{id}/layer_height` | Adaptive layer height (`{"mode":"adaptive","quality"}`) or reset |
 | PUT | `/objects/{id}/height_range` | Settings for a height range of an object (`min_z`, `max_z`, `layer_height`), or `{"clear":true}` |
 | POST | `/objects/{id}/modifier` | Add a cylinder or box modifier to an object, with its own settings (`shape`, `size_mm`, `center_mm`, `bottom_mm`, `config`); `GET /objects` lists them under `modifiers` |
+| PUT | `/objects/{id}/part_config` | The own settings of one part or modifier of an object: `{"part_id": <id under `parts` or `modifiers` in GET /objects>, "config": {"extruder": 2}}`; `extruder` (0 = the object's) and the per-region keys, all or nothing |
 | POST | `/arrange` | Arrange all (`202`; follow it with `GET /jobs/status`) |
 | POST | `/orient` | Auto-orient (`202`; follow it with `GET /jobs/status`) |
 | GET | `/jobs/status` | `{"idle"}`: whether an arrange or orient job is still running |

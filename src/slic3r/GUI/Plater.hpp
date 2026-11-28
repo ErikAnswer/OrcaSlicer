@@ -470,6 +470,8 @@ public:
 
     // BBS: restore
     std::vector<size_t> load_files(const std::vector<boost::filesystem::path>& input_files, LoadStrategy strategy = LoadStrategy::LoadModel | LoadStrategy::LoadConfig,  bool ask_multi = false, bool* published_out = nullptr);
+    // Remote API: load_files() joins several model files into one object with a part per file, without asking.
+    bool load_files_as_single_object { false };
     // to be called on drag and drop
     bool load_files(const wxArrayString& filenames);
 

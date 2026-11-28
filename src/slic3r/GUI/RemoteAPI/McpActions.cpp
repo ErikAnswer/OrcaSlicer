@@ -216,6 +216,7 @@ std::string object_name_of(const McpRow &r)
     if (t == "added" || t == "removed" || t == "layer_profile") return r.value;
     if (t == "transform" || t == "height_range" || t == "height_ranges_cleared" || t == "modifier_added") return r.where;
     if (t == "object_config") return before_sep(r.where, " only");
+    if (t == "part_config") return r.target.value("object", std::string());
     if (t == "duplicate") return before_sep(r.value, ", now ");
     if (t == "instance_plate") return before_sep(r.value, std::string(" ") + kArrow);
     if (t == "instances") return r.where.empty() ? std::string(MCP_T("An object")) : r.where;
@@ -237,6 +238,33 @@ int modifier_index(const ModelObject &mo, const json &t, bool current, const std
         found = int(i);
     }
     return found;
+}
+
+// The part or modifier a "part_config" row is about: by id while the ids still hold, else by name. -1: gone; -2: cannot
+// be tracked (after a reload more than one volume of the object has the name).
+int part_index(const ModelObject &mo, const json &t, bool current)
+{
+    const uint64_t    id    = t.value("volume_id", uint64_t(0));
+    const std::string name  = t.value("part", std::string());
+    int               found = -1;
+    for (size_t i = 0; i < mo.volumes.size(); ++i) {
+        const ModelVolume *v = mo.volumes[i];
+        if (current ? (uint64_t) v->id().id != id : v->name != name) continue;
+        if (current) return int(i);
+        if (found >= 0) return -2;
+        found = int(i);
+    }
+    return found;
+}
+
+// The value a part prints a key with: its own, else the object's, else the presets'.
+std::string part_setting_raw(const ModelObject &mo, const ModelVolume &volume, const std::string &key,
+                             const DynamicPrintConfig &merged)
+{
+    if (volume.config.has(key)) return volume.config.opt_serialize(key);
+    if (mo.config.has(key)) return mo.config.opt_serialize(key);
+    if (merged.has(key)) return merged.opt_serialize(key);
+    return key == "extruder" ? std::string("0") : std::string();
 }
 
 // ---- live values ------------------------------------------------------------------------------------------------
@@ -393,6 +421,13 @@ Live live_of(const McpRow &r)
         if (vi == -2) return {};
         return live_value(vi >= 0 ? r.value : std::string(kRemovedSince));
     }
+    if (type == "part_config") {
+        const int vi = part_index(*mo, t, current);
+        if (vi == -2) return {};
+        if (vi < 0) return live_value(std::string(kRemovedSince));
+        const std::string key = t.value("key", std::string());
+        return live_value(config_live_text(r, key, part_setting_raw(*mo, *mo->volumes[vi], key, bundle->full_config())));
+    }
     if (type == "object_config") {
         const std::string key = t.value("key", std::string());
         std::string       raw;
@@ -519,6 +554,21 @@ void refresh_extruder_column(int oi, const ModelObject *mo)
     wxDataViewItem item = om->GetItemById(oi);
     if (!item.IsOk()) return;
     const int ext = mo->config.has("extruder") ? mo->config.extruder() : 0;
+    om->SetExtruder(ext == 0 ? _L("default") : wxString::Format("%d", ext), item);
+    obj_list->Refresh();
+}
+
+// The filament column of one volume's row; an object with a single part has no row for it.
+void refresh_volume_extruder_column(int oi, int vi, const ModelObject &mo)
+{
+    if (mo.volumes.size() < 2) return;
+    ObjectList          *obj_list = wxGetApp().obj_list();
+    ObjectDataViewModel *om       = obj_list == nullptr ? nullptr : obj_list->GetModel();
+    if (om == nullptr) return;
+    wxDataViewItem item = om->GetItemByVolumeId(oi, vi);
+    if (!item.IsOk()) return;
+    const ModelVolume &volume = *mo.volumes[vi];
+    const int          ext    = volume.config.has("extruder") ? volume.config.extruder() : 0;
     om->SetExtruder(ext == 0 ? _L("default") : wxString::Format("%d", ext), item);
     obj_list->Refresh();
 }
@@ -762,6 +812,25 @@ std::string undo_row(const McpRow &r, bool &cancelled, std::string &note)
         if (!obj_list->del_subobject_from_object(oi, vi, itVolume)) return MCP_T("Can't delete it");
         obj_list->add_volumes_to_object_in_list(size_t(oi));
         obj_list->update_info_items(size_t(oi));
+        return {};
+    }
+    if (type == "part_config") {
+        const int vi = part_index(*mo, t, current);
+        if (vi == -2) return kUntracked;
+        if (vi < 0) return mcp_fmt(MCP_T("{name} is gone already"), {{"name", t.value("part", std::string())}});
+        ModelVolume       *volume = mo->volumes[vi];
+        const std::string  key    = t.value("key", std::string());
+        DynamicPrintConfig cfg    = volume->config.get();
+        try {
+            if (t.value("had_override", false)) cfg.set_deserialize_strict(key, t.value("before_raw", std::string()));
+            else cfg.erase(key);
+        } catch (const std::exception &) {
+            return MCP_T("Can't set it back");
+        }
+        Plater::TakeSnapshot snapshot(p, "Change Part Settings");
+        volume->config.assign_config(std::move(cfg));
+        p->changed_object(oi);
+        if (key == "extruder") refresh_volume_extruder_column(oi, vi, *mo);
         return {};
     }
     if (type == "object_config") {
