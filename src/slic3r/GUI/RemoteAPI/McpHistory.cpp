@@ -194,6 +194,7 @@ std::string mcp_row_subject(const McpRow &row)
     const std::string type = part("type");
     if (type == "config")         return "config|" + part("scope") + "|" + part("key") + "|" + part("index") + "|" + part("preset");
     if (type == "object_config")  return "object_config|" + part("object_id") + "|" + part("key");
+    if (type == "part_config")    return "part_config|" + part("object_id") + "|" + part("volume_id") + "|" + part("key");
     if (type == "preset")         return "preset|" + part("preset_type") + "|" + part("slot");
     if (type == "slot_mapping")   return "slot_mapping|" + part("filament");
     if (type == "layer_profile")  return "layer_profile|" + part("object_id");

@@ -16,6 +16,12 @@
 #include <string>
 #include <nlohmann/json.hpp>
 
+namespace Slic3r {
+class DynamicPrintConfig;
+class ModelObject;
+class ModelVolume;
+}
+
 namespace Slic3r { namespace GUI { namespace RemoteAPI {
 
 class McpActions
@@ -53,6 +59,13 @@ public:
     // nothing (status failed, reason for the log and the test hook) during a restore or a project load (not a slice or a job), for
     // a row that is gone or not revealable, or when the key is no longer in that preset or its tab is missing.
     static nlohmann::json reveal(int row);
+
+    // The value a part or modifier prints a key with: its own, else the object's, else the presets' (merged).
+    static std::string part_setting_raw(const ModelObject &mo, const ModelVolume &volume, const std::string &key,
+                                        const DynamicPrintConfig &merged);
+    // The object list's filament column of one volume (vol_idx in ModelObject::volumes), as
+    // ObjectList::set_extruder_for_selected_items() writes it. An object with a single part has no row for it.
+    static void refresh_volume_extruder_column(int obj_idx, int vol_idx, const ModelObject &mo);
 
     // A restore is running: the API answers 409 {"error":"busy","detail":"the user is restoring"}. Any thread.
     static bool restoring() { return s_restoring.load(); }
